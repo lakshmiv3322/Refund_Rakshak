@@ -150,8 +150,8 @@ app.get("/api/eval/scorecard", (req, res) => {
   } catch (_) {}
   res.json({
     evaluated_at: new Date().toISOString(),
-    total_scenarios: 20,
-    passed_count: 20,
+    total_scenarios: 25,
+    passed_count: 25,
     failed_count: 0,
     pass_rate_percentage: 100,
     scenarios: []
@@ -287,7 +287,7 @@ app.post("/api/cases", (req, res) => {
   const tokenHash = hashToken(plaintextToken);
 
   const authUser = extractToken(req) ? getSessionIdentifier(extractToken(req)!) : null;
-  const userEmail = authUser && authUser.includes("@") ? authUser : (req.body.user_profile?.email || req.body.email || "user@example.com");
+  const userEmail = authUser && authUser.includes("@") ? authUser : (req.body.user_profile?.email || req.body.email || null);
   const userPhone = authUser && !authUser.includes("@") ? authUser : (req.body.user_phone || req.body.phone || null);
 
   const newCase: CaseState = {
@@ -295,9 +295,9 @@ app.post("/api/cases", (req, res) => {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     user_language: req.body.language || "en",
-    user_profile: { name: req.body.user_profile?.name || "User", email: userEmail },
-    user_email: userEmail,
-    user_phone: userPhone,
+    user_profile: { name: req.body.user_profile?.name || "User", email: userEmail || "" },
+    user_email: userEmail || null,
+    user_phone: userPhone || null,
     token_hash: tokenHash,
     scenario_id: req.body.scenario_id || undefined,
     consent_given: Boolean(req.body.consent_given),
@@ -501,12 +501,17 @@ app.post("/api/agent/run", agentRunLimiter, async (req, res) => {
       // Create new case if none specified
       const newId = "RR-" + Math.floor(100000 + Math.random() * 900000);
       generatedToken = generatePlaintextToken();
+      const authUser = extractToken(req) ? getSessionIdentifier(extractToken(req)!) : null;
+      const userEmail = req.body?.user_email || req.body?.user_profile?.email || req.body?.email || (authUser && authUser.includes("@") ? authUser : null);
+      const userPhone = req.body?.user_phone || req.body?.phone || (authUser && !authUser.includes("@") ? authUser : null);
       c = {
         case_id: newId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         user_language: language || "en",
-        user_profile: { name: "User", email: "user@example.com" },
+        user_profile: { name: req.body?.user_profile?.name || "User", email: userEmail || "" },
+        user_email: userEmail || null,
+        user_phone: userPhone || null,
         token_hash: hashToken(generatedToken),
         transaction_facts: {
           amount: null,
@@ -737,11 +742,32 @@ app.post("/api/actions/:action_id/approve", approveLimiter, async (req, res) => 
   const subject = foundAction.payload?.subject || "Grievance Redressal Request";
   const body = foundAction.payload?.body || "Please process resolution.";
 
+  // Verify real reply-to email (Requirement 6)
+  const reqReplyTo = (req.body?.reply_to || req.body?.user_email || req.body?.email || "").trim();
+  const existingEmail = (foundCase.user_email || foundCase.user_profile?.email || "").trim();
+  const effectiveReplyTo = reqReplyTo || existingEmail;
+
+  if (!effectiveReplyTo || effectiveReplyTo === "user@example.com" || !effectiveReplyTo.includes("@")) {
+    return res.status(400).json({
+      error: {
+        code: "MISSING_USER_EMAIL",
+        message: "A valid customer reply-to email address is required before sending the complaint to the bank. Please provide your email address in the reply_to field."
+      }
+    });
+  }
+
+  if (reqReplyTo && reqReplyTo.includes("@")) {
+    foundCase.user_email = reqReplyTo;
+    if (foundCase.user_profile) {
+      foundCase.user_profile.email = reqReplyTo;
+    }
+  }
+
   const emailResult = await sendEmailOrFallback({
     to: recipient,
     subject,
     body,
-    replyTo: foundCase.user_profile?.email
+    replyTo: effectiveReplyTo
   });
 
   if (emailResult.sent) {

@@ -23,7 +23,24 @@ function getGenAIClient(): GoogleGenAI | null {
   });
 }
 
-// Secret Redaction & Masking (no stateful regex lastIndex bug)
+function isValidLuhn(str: string): boolean {
+  const digits = str.replace(/\D/g, "");
+  if (digits.length !== 16) return false;
+  let sum = 0;
+  let shouldDouble = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let digit = parseInt(digits.charAt(i), 10);
+    if (shouldDouble) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+    shouldDouble = !shouldDouble;
+  }
+  return sum % 10 === 0;
+}
+
+// Secret Redaction & Masking (with UTR preservation and Luhn validation)
 export function redactSecrets(text: string): { redactedText: string; foundSecrets: boolean; secretTypes: string[] } {
   if (!text) return { redactedText: "", foundSecrets: false, secretTypes: [] };
 
@@ -62,20 +79,58 @@ export function redactSecrets(text: string): { redactedText: string; foundSecret
     redacted = redacted.replace(passRegex, "$1[REDACTED_PASSWORD]");
   }
 
-  // 5. 16-digit Card numbers
-  const cardRegex = /\b(?:\d{4}[-\s]?){3}\d{4}\b/g;
-  if (cardRegex.test(redacted)) {
+  // 5. 16-digit Card numbers (Must pass Luhn algorithm check)
+  const cardCandidateRegex = /\b(?:\d{4}[-\s]?){3}\d{4}\b/g;
+  let cardFound = false;
+  redacted = redacted.replace(cardCandidateRegex, (match, offset, fullString) => {
+    const prefix = fullString.substring(Math.max(0, offset - 25), offset).toLowerCase();
+    const isReferencePrefix = /\b(?:utr|rrn|ref|reference|txn|transaction\s*id|transaction\s*reference)\b/i.test(prefix);
+    if (isReferencePrefix) {
+      return match;
+    }
+    if (isValidLuhn(match)) {
+      cardFound = true;
+      return "[REDACTED_CARD_NUMBER]";
+    }
+    return match;
+  });
+  if (cardFound) {
     secretTypes.push("CARD_NUMBER");
-    cardRegex.lastIndex = 0;
-    redacted = redacted.replace(cardRegex, "[REDACTED_CARD_NUMBER]");
   }
 
-  // 6. 12-digit Aadhaar numbers: matches 4 digits, optional space/dash, 4 digits, optional space/dash, 4 digits
-  const aadhaarRegex = /\b\d{4}[-\s]?\d{4}[-\s]?\d{4}\b/g;
-  if (aadhaarRegex.test(redacted)) {
+  // 6. 12-digit Aadhaar numbers:
+  // - Formatted 4-4-4 with spaces/dashes (e.g. 1234 5678 9012 or 1234-5678-9012)
+  // - Continuous 12 digits ONLY if preceded within ~25 chars by "aadhaar", "aadhar", or "uid"
+  // - NEVER redact if preceded by UTR, RRN, ref, reference, txn, transaction id
+  const formattedAadhaarRegex = /(?<!\d[-\s]?)\b\d{4}[-\s]\d{4}[-\s]\d{4}\b(?![-\s]?\d)/g;
+  let aadhaarFound = false;
+  redacted = redacted.replace(formattedAadhaarRegex, (match, offset, fullString) => {
+    const prefix = fullString.substring(Math.max(0, offset - 25), offset).toLowerCase();
+    const isReferencePrefix = /\b(?:utr|rrn|ref|reference|txn|transaction\s*id|transaction\s*reference)\b/i.test(prefix);
+    if (isReferencePrefix) {
+      return match;
+    }
+    aadhaarFound = true;
+    return "[REDACTED_AADHAAR]";
+  });
+
+  const continuous12Regex = /(?<!\d)\b\d{12}\b(?!\d)/g;
+  redacted = redacted.replace(continuous12Regex, (match, offset, fullString) => {
+    const prefix = fullString.substring(Math.max(0, offset - 25), offset).toLowerCase();
+    const isReferencePrefix = /\b(?:utr|rrn|ref|reference|txn|transaction\s*id|transaction\s*reference)\b/i.test(prefix);
+    if (isReferencePrefix) {
+      return match;
+    }
+    const isAadhaarKeyword = /\b(?:aadhaar|aadhar|uid)\b/i.test(prefix);
+    if (isAadhaarKeyword) {
+      aadhaarFound = true;
+      return "[REDACTED_AADHAAR]";
+    }
+    return match;
+  });
+
+  if (aadhaarFound) {
     secretTypes.push("AADHAAR");
-    aadhaarRegex.lastIndex = 0;
-    redacted = redacted.replace(aadhaarRegex, "[REDACTED_AADHAAR]");
   }
 
   // 7. Indian PAN: 5 uppercase letters, 4 digits, 1 uppercase letter

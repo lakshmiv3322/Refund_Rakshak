@@ -46,7 +46,9 @@ export const OutboxApprovals: React.FC<OutboxApprovalsProps> = ({
   );
   const outbox = caseState.outbox || [];
   const facts = caseState.transaction_facts || {};
-  const userProfile = caseState.user_profile || { email: "user@example.com", name: "User" };
+  const [userEmailInput, setUserEmailInput] = useState<string>(caseState.user_email || caseState.user_profile?.email || "");
+  const userEmail = (userEmailInput || caseState.user_email || caseState.user_profile?.email || "").trim();
+  const isEmailMissing = !userEmail || userEmail === "user@example.com" || !userEmail.includes("@");
 
   const handleCopyText = (actionId: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -150,10 +152,33 @@ export const OutboxApprovals: React.FC<OutboxApprovalsProps> = ({
                         </span>
                       </div>
                       <div>
-                        <span className="text-[10px] text-slate-400 block">Reply-To (Your Email):</span>
-                        <span className="text-blue-700 dark:text-blue-400 font-medium truncate block">
-                          {userProfile.email}
-                        </span>
+                        <span className="text-[10px] text-slate-400 block font-medium">Reply-To (Your Email):</span>
+                        {isEmailMissing ? (
+                          <div className="space-y-1">
+                            <input
+                              type="email"
+                              placeholder="Enter your real email (e.g. name@domain.com)"
+                              value={userEmailInput}
+                              onChange={(e) => setUserEmailInput(e.target.value)}
+                              className="w-full text-xs font-mono px-2 py-1 rounded border border-rose-300 dark:border-rose-700 bg-rose-50 dark:bg-rose-950/40 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-rose-500"
+                            />
+                            <span className="text-[9px] text-rose-600 dark:text-rose-400 block">
+                              * Required by bank before sending
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between">
+                            <span className="text-blue-700 dark:text-blue-400 font-medium truncate block">
+                              {userEmail}
+                            </span>
+                            <button
+                              onClick={() => setUserEmailInput("")}
+                              className="text-[10px] text-slate-400 hover:text-blue-600 underline"
+                            >
+                              Change
+                            </button>
+                          </div>
+                        )}
                       </div>
                       <div>
                         <span className="text-[10px] text-slate-400 block">Potential Delay Compensation:</span>

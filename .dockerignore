@@ -1,7 +1,9 @@
+data/*.sqlite*
 node_modules
 dist
 .env
 .env.local
+test
 .git
 .github
 *.log

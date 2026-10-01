@@ -293,11 +293,11 @@ ${JSON.stringify(caseSnapshot, null, 2)}`;
   let modelToUse = activeModel;
   let response: any = null;
 
-  // Retry loop with exponential backoff on 429/5xx and fallback model
-  const maxAttempts = 3;
+  // Retry loop with quick fallback on quota or unavailable errors
+  const maxAttempts = 2;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const abortController = new AbortController();
-    const timeoutId = setTimeout(() => abortController.abort(), 25000);
+    const timeoutId = setTimeout(() => abortController.abort(), 8000);
 
     try {
       response = await ai.models.generateContent({
@@ -316,12 +316,11 @@ ${JSON.stringify(caseSnapshot, null, 2)}`;
       clearTimeout(timeoutId);
       console.warn(`Gemini call error on ${modelToUse} (attempt ${attempt}/${maxAttempts}):`, err.message);
 
-      if (attempt < maxAttempts) {
-        const backoffMs = attempt === 1 ? 2000 : 5000;
-        await new Promise(r => setTimeout(r, backoffMs));
+      const isQuotaOrUnavailable = /quota|429|503|RESOURCE_EXHAUSTED|UNAVAILABLE|fetch failed|ENOTFOUND|abort/i.test(err.message);
+      if (attempt < maxAttempts && !isQuotaOrUnavailable) {
         modelToUse = fallbackModel;
       } else {
-        console.warn("Gemini unavailable after retries — executing deterministic rules engine fallback.");
+        console.warn("Gemini unavailable / quota reached — executing deterministic rules engine fallback.");
         return handleDeterministicFallback(caseState, redactedText, userWarningPrefix, plan, options);
       }
     }
@@ -484,6 +483,26 @@ ${JSON.stringify(caseSnapshot, null, 2)}`;
     options.onToken(finalMessage);
   }
 
+  if (caseState.pending_actions.some((a: any) => a.status === "pending_approval" || a.status === "pending_human_approval")) {
+    finalStatus = "approval_required";
+    if (!approvalRequest && caseState.pending_actions.length > 0) {
+      approvalRequest = caseState.pending_actions[caseState.pending_actions.length - 1];
+    }
+  }
+
+  if (!caseState.classification) {
+    if (caseState.branch === "fraud_safety_branch" || caseState.branch === "unauthorized_fraud_branch") {
+      caseState.classification = "unauthorized_or_fraud";
+    } else if (caseState.branch === "merchant_refund_branch") {
+      caseState.classification = "merchant_refund";
+    } else if (caseState.branch === "out_of_scope_atm") {
+      caseState.classification = "atm_or_card";
+    } else if (caseState.transaction_facts.amount && caseState.transaction_facts.transaction_reference) {
+      caseState.classification = "supported_upi_failed_debited_not_credited";
+      caseState.branch = "supported_upi_failed_debit";
+    }
+  }
+
   caseState.chat_history.push({
     role: "model",
     text: finalMessage,
@@ -500,7 +519,98 @@ ${JSON.stringify(caseSnapshot, null, 2)}`;
   };
 }
 
-// Graceful offline degradation handler (Requirement 22)
+function parseDateFromText(text: string, referenceDateStr?: string): string | null {
+  const refDate = referenceDateStr ? new Date(referenceDateStr) : new Date();
+  const currentYear = isNaN(refDate.getFullYear()) ? new Date().getFullYear() : refDate.getFullYear();
+
+  // 1. ISO date: YYYY-MM-DD
+  const isoMatch = text.match(/\b(20\d{2})[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])\b/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+
+  // 2. Relative dates: "yesterday"
+  if (/\byesterday\b/i.test(text)) {
+    const d = new Date(refDate);
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split("T")[0];
+  }
+
+  const daysAgoMatch = text.match(/\b(\d+)\s+days?\s+ago\b/i);
+  if (daysAgoMatch) {
+    const days = parseInt(daysAgoMatch[1], 10);
+    const d = new Date(refDate);
+    d.setDate(d.getDate() - days);
+    return d.toISOString().split("T")[0];
+  }
+
+  // 3. Formats: "22 Sept", "22nd September", "22-Sep-2026", "22 September 2026", "Sept 22"
+  const months: { [k: string]: string } = {
+    jan: "01", january: "01",
+    feb: "02", february: "02",
+    mar: "03", march: "03",
+    apr: "04", april: "04",
+    may: "05",
+    jun: "06", june: "06",
+    jul: "07", july: "07",
+    aug: "08", august: "08",
+    sep: "09", sept: "09", september: "09",
+    oct: "10", october: "10",
+    nov: "11", november: "11",
+    dec: "12", december: "12"
+  };
+  const monthKeys = Object.keys(months).join("|");
+
+  const dayMonthRegex = new RegExp(`\\b([0-2]?[1-9]|3[01])(?:st|nd|rd|th)?(?:\\s+|-|/)(` + monthKeys + `)(?:(?:\\s+|-|/|,\\s*)(\\d{4}))?\\b`, "i");
+  const dmMatch = text.match(dayMonthRegex);
+  if (dmMatch) {
+    const day = dmMatch[1].padStart(2, "0");
+    const mStr = dmMatch[2].toLowerCase();
+    const month = months[mStr];
+    const year = dmMatch[3] ? dmMatch[3] : String(currentYear);
+    return `${year}-${month}-${day}`;
+  }
+
+  const monthDayRegex = new RegExp(`\\b(` + monthKeys + `)(?:\\s+|-|/)([0-2]?[1-9]|3[01])(?:st|nd|rd|th)?(?:(?:\\s+|-|/|,\\s*)(\\d{4}))?\\b`, "i");
+  const mdMatch = text.match(monthDayRegex);
+  if (mdMatch) {
+    const mStr = mdMatch[1].toLowerCase();
+    const month = months[mStr];
+    const day = mdMatch[2].padStart(2, "0");
+    const year = mdMatch[3] ? mdMatch[3] : String(currentYear);
+    return `${year}-${month}-${day}`;
+  }
+
+  return null;
+}
+
+function extractReferenceFromText(text: string): string | null {
+  const explicitMatch = text.match(/\b(?:utr|rrn|ref|reference|txn|transaction\s*id)\s*(?:is|was|:|-|=)?\s*([A-Za-z0-9]{6,22})\b/i);
+  if (explicitMatch) {
+    return explicitMatch[1];
+  }
+  const tokenMatch = text.match(/\b(?:DEMOUPI\w+|UPI\w+|REF\w+|BK\w+)\b/i);
+  if (tokenMatch) {
+    return tokenMatch[0];
+  }
+  const twelveDigits = text.match(/\b\d{12}\b/);
+  if (twelveDigits) {
+    return twelveDigits[0];
+  }
+  return null;
+}
+
+function detectLanguage(text: string): string {
+  if (/[\u0900-\u097F]/.test(text)) {
+    if (/\b(?:माझे|खात्यातून|पैसे|कापले|आहेत)\b/i.test(text)) return "mr";
+    return "hi";
+  }
+  if (/[\u0B80-\u0BFF]/.test(text)) return "ta";
+  if (/[\u0C00-\u0C7F]/.test(text)) return "te";
+  return "en";
+}
+
+// Graceful offline degradation handler (Requirement 22 & Offline Fallback Requirements)
 function handleDeterministicFallback(
   caseState: CaseState,
   userMessage: string,
@@ -509,24 +619,78 @@ function handleDeterministicFallback(
   options?: RunAgentOptions
 ) {
   const f = caseState.transaction_facts;
+  const lang = detectLanguage(userMessage);
 
-  // Extract amount with regex if not already present
+  // 1. Prompt injection defense
+  const isInjection = /\b(?:system\s*override|ignore\s+(?:all\s+)?previous\s+instructions|output\s+all\s+(?:database|credentials|secret|api\s*key)|reveal\s+(?:your\s+)?prompt|disregard\s+(?:all\s+)?prior)\b/i.test(userMessage);
+  if (isInjection) {
+    const injectionMsg = `${userWarningPrefix}I cannot process instructions that attempt to override safety protocols or disclose internal system configuration. I assist exclusively with valid financial grievance redressal under RBI guidelines.`;
+    caseState.safety_flags.push("prompt_injection_attempt_defended");
+    caseState.chat_history.push({ role: "model", text: injectionMsg, timestamp: new Date().toISOString() });
+    return {
+      message: injectionMsg,
+      status: "completed",
+      pending_question: undefined,
+      approval_request: undefined,
+      plan: ["Security defense: Prompt injection neutralized"],
+      steps: (caseState as any).agent_steps
+    };
+  }
+
+  // 2. Fraud safety check (with negation detection)
+  const isNegatedFraud = /\b(?:not\s+a?\s*fraud|not\s+a?\s*hack|not\s+hacked|authorized\s+this|i\s+authorized|authorized\s+payment)\b/i.test(userMessage);
+  const isFraud = !isNegatedFraud && (
+    /\b(?:hacked|hack|did\s+not\s+make|unauthorized|without\s+my\s+consent|fraud|stolen|phishing|compromised)\b/i.test(userMessage) ||
+    userMessage.includes("did not make this") ||
+    userMessage.includes("someone hacked")
+  );
+
+  if (isFraud) {
+    caseState.classification = "unauthorized_or_fraud";
+    caseState.branch = "fraud_safety_branch";
+    caseState.latest_compensation_estimate = 0;
+    caseState.latest_days_delayed = 0;
+
+    const fraudMsg = `${userWarningPrefix}CRITICAL SAFETY NOTICE: Your grievance involves an unauthorized or fraudulent transaction.
+
+1. Immediately report this incident to the National Cyber Crime Helpline at 1930 or online at https://cybercrime.gov.in.
+2. Contact your bank's 24x7 emergency helpline immediately to freeze your account/card.
+3. Under RBI Circular DBR.No.Leg.BC.78/09.07.005/2017-18 (Customer Liability in Unauthorized Electronic Banking Transactions):
+   • Reporting within 3 working days ensures zero customer liability for unauthorized third-party transactions.
+   • Statutory daily delay compensation does NOT apply to unauthorized cyber fraud disputes.`;
+
+    if (options?.onToken) options.onToken(fraudMsg);
+
+    caseState.chat_history.push({ role: "model", text: fraudMsg, timestamp: new Date().toISOString() });
+    return {
+      message: fraudMsg,
+      status: "safety_stop",
+      pending_question: undefined,
+      approval_request: undefined,
+      plan: ["Safety Stop: Unauthorized Cyber Fraud Protocol (1930 / cybercrime.gov.in)"],
+      steps: (caseState as any).agent_steps
+    };
+  }
+
+  // 3. Extract facts from message
   if (!f.amount) {
-    const amountMatch = userMessage.match(/(?:rs\.?|inr|₹)\s*(\d+(?:,\d+)*(?:\.\d+)?)/i) || userMessage.match(/\b(\d{2,6})\s*(?:rupees|rs|inr)/i);
+    const amountMatch =
+      userMessage.match(/(?:rs\.?|inr|₹)\s*(\d+(?:,\d+)*(?:\.\d+)?)/i) ||
+      userMessage.match(/\b(\d{2,6})\s*(?:rupees|rs|inr|रुपये|रुपया)\b/i) ||
+      userMessage.match(/\b(?:payment\s+of|amount\s+of|transfer\s+of|debited\s+of|sum\s+of|of|for)\s*(\d{2,6}(?:,\d+)*(?:\.\d+)?)\b/i) ||
+      userMessage.match(/\b(\d{3,6})\s*(?:to\s+(?:my\s+)?friend|to\s+store|to\s+merchant|failed)\b/i);
     if (amountMatch) {
       f.amount = parseFloat(amountMatch[1].replace(/,/g, ""));
     }
   }
 
-  // Extract reference / UTR
   if (!f.transaction_reference) {
-    const refMatch = userMessage.match(/\b[A-Za-z0-9]{12}\b/);
-    if (refMatch) {
-      f.transaction_reference = refMatch[0];
+    const ref = extractReferenceFromText(userMessage);
+    if (ref) {
+      f.transaction_reference = ref;
     }
   }
 
-  // Detect bank
   if (!f.bank_or_provider) {
     const lower = userMessage.toLowerCase();
     if (lower.includes("sbi") || lower.includes("state bank")) f.bank_or_provider = "State Bank of India";
@@ -537,12 +701,147 @@ function handleDeterministicFallback(
     else if (lower.includes("pnb")) f.bank_or_provider = "Punjab National Bank";
   }
 
-  // Use current date if no date provided
   if (!f.transaction_date) {
-    f.transaction_date = (caseState.simulated_now || new Date().toISOString()).split("T")[0];
+    const parsedDate = parseDateFromText(userMessage, caseState.simulated_now);
+    if (parsedDate) {
+      f.transaction_date = parsedDate;
+    }
   }
 
-  // Determine scenario
+  // 4. ATM dispute check
+  const isAtm = /\b(?:atm|cash\s+not\s+dispensed|cash\s+dispense\s+failed|machine\s+did\s+not\s+give\s+cash)\b/i.test(userMessage);
+  if (isAtm) {
+    caseState.classification = "atm_or_card";
+    caseState.branch = "out_of_scope_atm";
+    caseState.scenario_id = "atm_cash_not_dispensed";
+
+    let calc: any = null;
+    if (f.transaction_date) {
+      try {
+        calc = calculateTATDeadlineAndCompensation(
+          f.transaction_date,
+          caseState.simulated_now || new Date().toISOString(),
+          "atm_cash_not_dispensed"
+        );
+        caseState.latest_compensation_estimate = calc.potential_compensation_estimate;
+        caseState.latest_days_delayed = calc.days_delayed;
+      } catch (_) {}
+    }
+
+    const atmMsg = `${userWarningPrefix}I have recorded your ATM cash non-dispensation dispute. Under RBI Circular RBI/2019-20/67 Annexure Item 1(a), reversal TAT is T+5 calendar days with ₹100/day delay compensation. Potential compensation estimate, subject to verification: ₹${calc?.potential_compensation_estimate || 0}.`;
+    if (options?.onToken) options.onToken(atmMsg);
+    caseState.chat_history.push({ role: "model", text: atmMsg, timestamp: new Date().toISOString() });
+    return {
+      message: atmMsg,
+      status: "out_of_scope",
+      pending_question: undefined,
+      approval_request: undefined,
+      plan: ["ATM Cash Non-Dispensation Redressal (Item 1(a))"],
+      steps: (caseState as any).agent_steps
+    };
+  }
+
+  // 5. Merchant / E-commerce / Swiggy cancelled order refund
+  const isMerchantRefund = /\b(?:swiggy|zomato|amazon|flipkart|cancelled\s+(?:food\s+)?order|food\s+order|merchant\s+refund|store\s+refund|e-commerce)\b/i.test(userMessage);
+  if (isMerchantRefund) {
+    caseState.classification = "merchant_refund";
+    caseState.branch = "merchant_refund_branch";
+    caseState.scenario_id = "delayed_merchant_refund";
+
+    let calc: any = null;
+    if (f.transaction_date) {
+      try {
+        calc = calculateTATDeadlineAndCompensation(
+          f.transaction_date,
+          caseState.simulated_now || new Date().toISOString(),
+          "delayed_merchant_refund"
+        );
+        caseState.latest_compensation_estimate = calc.potential_compensation_estimate;
+        caseState.latest_days_delayed = calc.days_delayed;
+      } catch (_) {}
+    }
+
+    const merchMsg = `${userWarningPrefix}I have recorded your merchant refund dispute. Under RBI Circular RBI/2019-20/67 Item 4(c), e-commerce/merchant refund turnaround is T+5 calendar days from refund initiation with ₹100/day statutory delay compensation. Potential compensation estimate, subject to verification: ₹${calc?.potential_compensation_estimate || 0}.`;
+    if (options?.onToken) options.onToken(merchMsg);
+    caseState.chat_history.push({ role: "model", text: merchMsg, timestamp: new Date().toISOString() });
+    return {
+      message: merchMsg,
+      status: "completed",
+      pending_question: undefined,
+      approval_request: undefined,
+      plan: ["Merchant / E-Commerce Refund Resolution (Item 4(c))"],
+      steps: (caseState as any).agent_steps
+    };
+  }
+
+  // 6. Wrong recipient UPI
+  const isWrongRecipient = /\b(?:wrong\s+recipient|wrong\s+mobile|wrong\s+person|wrong\s+number|wrong\s+account|sent\s+to\s+wrong)\b/i.test(userMessage);
+  if (isWrongRecipient) {
+    caseState.classification = "upi_wrong_recipient";
+    caseState.branch = "wrong_recipient_branch";
+    caseState.scenario_id = "upi_wrong_recipient";
+    caseState.latest_compensation_estimate = 0;
+    caseState.latest_days_delayed = 0;
+
+    const wrongMsg = `${userWarningPrefix}You reported a payment sent to an unintended recipient. Under RBI guidelines, no statutory delay compensation applies to wrong-recipient transfers. You must submit a recall request to your remitter bank with the transaction UTR so they can initiate an interbank recovery with the beneficiary bank.`;
+    if (options?.onToken) options.onToken(wrongMsg);
+    caseState.chat_history.push({ role: "model", text: wrongMsg, timestamp: new Date().toISOString() });
+    return {
+      message: wrongMsg,
+      status: "completed",
+      pending_question: undefined,
+      approval_request: undefined,
+      plan: ["Wrong recipient UPI recall guidance (no statutory delay compensation applies)"],
+      steps: (caseState as any).agent_steps
+    };
+  }
+
+  // 7. Missing details check for standard UPI grievance
+  const missing: string[] = [];
+  if (!f.amount) missing.push("amount");
+  if (!f.transaction_date) missing.push("transaction_date");
+  if (!f.transaction_reference) missing.push("transaction_reference");
+  if (!f.bank_or_provider) missing.push("bank_or_provider");
+
+  caseState.missing_fields = missing;
+  caseState.transaction_facts.missing_fields = missing;
+
+  if (missing.length > 0) {
+    let missingQuestion = `To evaluate your grievance under RBI statutory rules, please provide the following missing details:\n` +
+      missing.map(m => `• ${m.replace(/_/g, " ").toUpperCase()}`).join("\n");
+
+    if (lang === "hi") {
+      missingQuestion = `आपकी शिकायत दर्ज करने के लिए, कृपया निम्नलिखित जानकारी प्रदान करें:\n` +
+        missing.map(m => `• ${m.replace(/_/g, " ")}`).join("\n");
+    } else if (lang === "ta") {
+      missingQuestion = `உங்கள் புகாரை பதிவு செய்ய, விடுபட்ட விவரங்களை வழங்கவும்:\n` +
+        missing.map(m => `• ${m.replace(/_/g, " ")}`).join("\n");
+    } else if (lang === "te") {
+      missingQuestion = `మీ ఫిర్యాదును నమోదు చేయడానికి, దయచేసి వివరాలను అందించండి:\n` +
+        missing.map(m => `• ${m.replace(/_/g, " ")}`).join("\n");
+    } else if (lang === "mr") {
+      missingQuestion = `आपली तक्रार नोंदवण्यासाठी, कृपया खालील माहिती द्या:\n` +
+        missing.map(m => `• ${m.replace(/_/g, " ")}`).join("\n");
+    }
+
+    const fullMsg = userWarningPrefix + missingQuestion;
+    if (options?.onToken) options.onToken(fullMsg);
+    caseState.chat_history.push({ role: "model", text: fullMsg, timestamp: new Date().toISOString() });
+
+    return {
+      message: fullMsg,
+      status: "needs_input",
+      pending_question: missingQuestion,
+      approval_request: undefined,
+      plan,
+      steps: (caseState as any).agent_steps
+    };
+  }
+
+  // 8. Complete standard UPI failure
+  caseState.classification = "supported_upi_failed_debited_not_credited";
+  caseState.branch = "supported_upi_failed_debit";
+
   const isMerchant = userMessage.toLowerCase().includes("store") || userMessage.toLowerCase().includes("shop") || userMessage.toLowerCase().includes("merchant");
   const scenarioId = isMerchant ? "upi_p2m_merchant_debit_failed" : "upi_p2p_debit_not_credited";
   caseState.scenario_id = scenarioId;
@@ -551,7 +850,7 @@ function handleDeterministicFallback(
   let calc: any = null;
   try {
     calc = calculateTATDeadlineAndCompensation(
-      f.transaction_date,
+      f.transaction_date!,
       caseState.simulated_now || new Date().toISOString(),
       scenarioId
     );
@@ -579,7 +878,17 @@ function handleDeterministicFallback(
 
   caseState.pending_actions.push(act);
 
-  const fallbackMsg = `${userWarningPrefix}I have recorded your grievance and computed your statutory turnaround under RBI Circular RBI/2019-20/67 (offline verified rules active).\n\n• Amount: ₹${f.amount || "N/A"}\n• Reversal Deadline: ${calc?.deadline_date || "T+1"}\n• Days Delayed: ${calc?.days_delayed || 0}\n• Potential Compensation: ₹${calc?.potential_compensation_estimate || 0} (subject to verification)\n\nI have generated an official complaint draft to ${f.bank_or_provider || "your bank"} ready for your approval. You can copy the text or download the verified PDF Evidence Pack.`;
+  let fallbackMsg = `${userWarningPrefix}I have recorded your grievance and computed your statutory turnaround under RBI Circular RBI/2019-20/67 (offline verified rules active).\n\n• Amount: ₹${f.amount || "N/A"}\n• Reversal Deadline: ${calc?.deadline_date || "T+1"}\n• Days Delayed: ${calc?.days_delayed || 0}\n• Potential Compensation: ₹${calc?.potential_compensation_estimate || 0} (subject to verification)\n\nI have generated an official complaint draft to ${f.bank_or_provider || "your bank"} ready for your approval. You can copy the text or download the verified PDF Evidence Pack.`;
+
+  if (lang === "hi") {
+    fallbackMsg = `${userWarningPrefix}मैंने आपकी ₹${f.amount || ""} की यूपीआई शिकायत दर्ज कर ली है। आरबीआई नियमों के तहत बैंक शिकायत का मसौदा तैयार है।`;
+  } else if (lang === "ta") {
+    fallbackMsg = `${userWarningPrefix}உங்கள் ₹${f.amount || ""} UPI புகார் பதிவு செய்யப்பட்டது. வங்கி புகார் வரைவு தயாராக உள்ளது.`;
+  } else if (lang === "te") {
+    fallbackMsg = `${userWarningPrefix}మీ ₹${f.amount || ""} UPI ఫిర్యాదు నమోదు చేయబడింది. బ్యాంకు ఫిర్యాదు డ్రాఫ్ట్ సిద్ధంగా ఉంది.`;
+  } else if (lang === "mr") {
+    fallbackMsg = `${userWarningPrefix}तुमची ₹${f.amount || ""} ची यूपीआय तक्रार नोंदवली गेली आहे. बँक तक्रार मसुदा तयार आहे.`;
+  }
 
   if (options?.onToken) {
     options.onToken(fallbackMsg);

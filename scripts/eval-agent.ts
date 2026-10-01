@@ -396,9 +396,11 @@ async function runEval() {
 
       s.assertFn(res, caseState);
       results.push({ id: s.id, category: s.category, name: s.name, status: "PASS", details: "All assertions satisfied" });
+      console.log(`[Scenario ${String(s.id).padStart(2, "0")}/25] PASS - ${s.name}`);
       passed++;
     } catch (err: any) {
       results.push({ id: s.id, category: s.category, name: s.name, status: "FAIL", details: err.message });
+      console.log(`[Scenario ${String(s.id).padStart(2, "0")}/25] FAIL - ${s.name}: ${err.message}`);
       failed++;
     }
   }

@@ -97,16 +97,28 @@ describe("Secret Redaction & Financial Masking", () => {
     expect(res.redactedText).toContain("[REDACTED_PASSWORD]");
   });
 
-  it("redacts 16-digit card numbers", () => {
-    const res = redactSecrets("Card used was 4111 2222 3333 4444");
+  it("redacts 16-digit card numbers passing Luhn check", () => {
+    const res = redactSecrets("Card used was 4111 1111 1111 1111 for the payment");
     expect(res.foundSecrets).toBe(true);
     expect(res.redactedText).toContain("[REDACTED_CARD_NUMBER]");
+    expect(res.redactedText).not.toContain("4111 1111 1111 1111");
+
+    // Invalid Luhn 16-digit number should NOT be redacted as card number
+    const resInvalid = redactSecrets("Random numbers 1234 5678 9012 3456 here");
+    expect(resInvalid.redactedText).not.toContain("[REDACTED_CARD_NUMBER]");
   });
 
-  it("redacts 12-digit Aadhaar numbers", () => {
-    const res = redactSecrets("Aadhaar id is 1234 5678 9012");
+  it("redacts 12-digit Aadhaar numbers formatted and with keyword", () => {
+    const res = redactSecrets("Aadhaar 1234 5678 9012");
     expect(res.foundSecrets).toBe(true);
     expect(res.redactedText).toContain("[REDACTED_AADHAAR]");
+    expect(res.redactedText).not.toContain("1234 5678 9012");
+  });
+
+  it("preserves 12-digit UTR/RRN numbers and never redacts them", () => {
+    const res = redactSecrets("My UPI reference is UTR 123456789012 for the payment");
+    expect(res.redactedText).toContain("123456789012");
+    expect(res.redactedText).not.toContain("[REDACTED_AADHAAR]");
   });
 
   it("masks transaction reference to last 4 characters", () => {

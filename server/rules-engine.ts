@@ -160,7 +160,7 @@ export function calculateTATDeadlineAndCompensation(
   if (scenario.scenario_id === "unauthorized_fraud_golden_hour") {
     explanation = `Unauthorized transaction reported on ${txDateStr}. Under ${scenario.circular_reference}, customer notification to the bank within 3 working days establishes ZERO customer liability. Daily delay compensation does not apply to unauthorized fraud disputes.`;
   } else if (scenario.scenario_id === "upi_wrong_recipient") {
-    explanation = `Wrong-recipient UPI transfer on ${txDateStr}. Under ${scenario.circular_reference}, recovery is processed via remitter bank chargeback/recall request to the beneficiary bank. Daily delay compensation does not apply to user input errors.`;
+    explanation = `Wrong-recipient UPI transfer on ${txDateStr}. Under ${scenario.circular_reference}, recovery is processed via remitter bank recall request to the beneficiary bank; no statutory delay compensation applies to user-initiated wrong-recipient transfers. Daily delay compensation does not apply to user input errors.`;
   } else {
     explanation = `Transaction date ${txDateStr} (T). Under ${scenario.circular_reference}, reversal TAT is T+${tatDays} ${scenario.day_basis} day(s) (${deadlineStr}). As of ${nowStr}, transaction has been delayed by ${daysDelayed} day(s) beyond T+${tatDays} at statutory rate of ₹${scenario.compensation_per_day}/day.`;
   }
