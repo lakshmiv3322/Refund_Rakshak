@@ -1,5 +1,5 @@
-# aiKart Agent Manifest Template for RefundRakshak
-# Replace field names with those in the official aiKart Agent Manifest Guide.
+# aiKart Agent Manifest for RefundRakshak
+# Standard aiKart v1alpha1 specification
 
 apiVersion: aikart.ai/v1alpha1
 kind: Agent
@@ -7,7 +7,7 @@ metadata:
   name: RefundRakshak
   version: "1.0.0"
   category: "Fintech Grievance & Legal-Tech Agent"
-  description: "Multilingual AI agent that reads transaction evidence, classifies grievances, applies verified RBI rules, and automates escalation paths."
+  description: "Production-grade multilingual AI agent that processes Indian UPI and payment grievances, applies verified RBI TAT rules, prepares deterministic escalations, and automates grievance redressal with explicit human authorization."
 spec:
   endpoint: "<DEPLOYED_ENDPOINT>/api/agent/run"
   healthEndpoint: "<DEPLOYED_HEALTH>/api/health"
@@ -18,23 +18,48 @@ spec:
     - "image/jpeg"
   supportedOutput:
     - "application/json"
+    - "text/event-stream"
   languages:
     - "en"
     - "hi"
     - "ta"
+    - "te"
+    - "mr"
   tools:
+    - name: get_case_state
+      description: "Retrieves current grievance case facts, timeline, and pending actions."
+    - name: update_case_facts
+      description: "Updates and validates transaction facts (amount, date, reference, bank, status) with strict validation."
     - name: extract_transaction_evidence
-      description: "Extracts amount, date, UTR/ref, and status from transaction text or screenshot."
-    - name: classify_grievance
-      description: "Classifies grievance into supported UPI failure, fraud, merchant refund, or missing evidence."
+      description: "Extracts structured transaction evidence from payment screenshots or text."
+    - name: record_classification
+      description: "Records grievance classification (supported UPI failure, unauthorized fraud, merchant refund, ATM dispute) with rationale."
     - name: lookup_verified_rule
-      description: "Applies verified RBI circular rules (RBI/2019-20/67)."
+      description: "Looks up verified statutory rules from RBI circulars (RBI/2019-20/67)."
     - name: calculate_deadline_and_estimate
-      description: "Computes TAT deadline and potential compensation estimate."
-    - name: simulate_time
-      description: "Advances simulated clock and triggers escalation scheduler."
+      description: "Calculates deterministic T+1 reversal deadline and statutory delayed-compensation estimate."
+    - name: validate_ombudsman_preconditions
+      description: "Validates preconditions under the RBI Integrated Ombudsman Scheme (30-day waiting period from initial bank complaint)."
+    - name: generate_bank_complaint
+      description: "Generates a structured bank grievance redressal complaint draft citing relevant circulars."
+    - name: generate_nodal_escalation
+      description: "Generates an escalation notice to Principal Nodal Officer for unresolved disputes."
+    - name: generate_ombudsman_draft
+      description: "Generates an official RBI Ombudsman complaint package for submission on cms.rbi.org.in."
+    - name: generate_evidence_pack
+      description: "Generates a comprehensive PDF evidence pack with masked reference numbers and legal disclaimers."
+    - name: draft_email
+      description: "Creates a pending action for bank or nodal officer communication requiring explicit human approval."
+    - name: schedule_followup
+      description: "Schedules automated follow-up checks against statutory SLA timelines."
+    - name: ask_user
+      description: "Prompts the user for specific missing transaction details and pauses agent execution."
+    - name: stop_branch
+      description: "Terminates standard grievance path for safety branch (cybercrime fraud) or out-of-scope disputes."
   safetyNotes:
-    - "Prototype does not guarantee recovery or legal advice."
-    - "Requires explicit user approval before sending emails or notifications."
-    - "Masks sensitive financial data."
-  maintainer: "BharatAgentic Hackathon Team"
+    - "Does not offer legal advice or guarantee financial recovery."
+    - "Requires explicit human authorization prior to sending any outbound communication."
+    - "Automatically redacts UPI PINs, OTPs, CVVs, passwords, and Aadhaar numbers from all storage and telemetry."
+    - "Masks transaction reference numbers to last 4 digits in external exports and logs."
+    - "Refers unauthorized and fraudulent transactions to the National Cyber Crime Reporting Portal (cybercrime.gov.in / 1930)."
+  maintainer: "RefundRakshak Team (BharatAgentic Hackathon)"
