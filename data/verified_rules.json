@@ -1,0 +1,330 @@
+{
+  "rules": [
+    {
+      "rule_id": "rbi_failed_transaction_upi_debit_not_credited",
+      "title": "Harmonisation of Turn Around Time (TAT) and customer compensation for failed transactions using authorised Payment Systems",
+      "issuer": "Reserve Bank of India",
+      "circular_or_scheme_date": "2019-09-20",
+      "notification_number": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20",
+      "effective_date": "2019-10-15",
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "source_type": "RBI Circular",
+      "exact_rule_summary": "For UPI and authorised payment systems where account is debited but beneficiary is not credited, reversal must be automatic (T+1 for P2P, T+5 for P2M). If not reversed within TAT, compensation of ₹100 per day of delay must be paid by the responsible bank/system provider to the customer's account.",
+      "applicability_conditions": {
+        "transaction_family": "UPI_OR_AUTHORIZED_PAYMENT_SYSTEM",
+        "condition": "payer_account_debited_but_beneficiary_not_credited",
+        "reversal_deadline_expression": "T+1 (P2P) / T+5 (P2M)",
+        "automatic_compensation": true,
+        "compensation_rate": 100
+      },
+      "exclusions_or_caveats": [
+        "Does not apply to unauthorized transactions or suspected fraud (handled under separate reporting path)",
+        "Does not apply to merchant refund delays where merchant has not processed refund",
+        "Does not apply to ATM cash non-dispensation cases (separate TAT rule applies)",
+        "Potential compensation estimate, subject to verification by the regulated entity"
+      ],
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: RBI Circular RBI/2019-20/67, last checked 2026-03-30"
+    },
+    {
+      "rule_id": "rbi_failed_atm_cash_not_dispensed",
+      "title": "Harmonisation of Turn Around Time (TAT) and customer compensation for failed transactions - ATM Cash Dispensation",
+      "issuer": "Reserve Bank of India",
+      "circular_or_scheme_date": "2019-09-20",
+      "notification_number": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Annexure Item 1(a)",
+      "effective_date": "2019-10-15",
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "source_type": "RBI Circular",
+      "exact_rule_summary": "Customer account debited but cash not dispensed at ATM. Reversal must be completed within T+5 calendar days. Pro-active compensation of ₹100 per day of delay beyond T+5.",
+      "applicability_conditions": {
+        "transaction_family": "ATM",
+        "condition": "account_debited_cash_not_dispensed",
+        "reversal_deadline_expression": "T+5",
+        "automatic_compensation": true,
+        "compensation_rate": 100
+      },
+      "exclusions_or_caveats": [
+        "Requires ATM terminal identifier or location details for reconciliation with ATM switch log",
+        "Potential compensation estimate, subject to verification"
+      ],
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: RBI Circular RBI/2019-20/67 Item 1(a), last checked 2026-03-30"
+    },
+    {
+      "rule_id": "rbi_failed_card_to_card",
+      "title": "Harmonisation of Turn Around Time (TAT) - Card to Card transfers",
+      "issuer": "Reserve Bank of India",
+      "circular_or_scheme_date": "2019-09-20",
+      "notification_number": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Annexure Item 2(a)",
+      "effective_date": "2019-10-15",
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "source_type": "RBI Circular",
+      "exact_rule_summary": "Card account debited but beneficiary card account not credited. Auto-reversal within T+1 day. Compensation ₹100 per day of delay beyond T+1.",
+      "applicability_conditions": {
+        "transaction_family": "CARDS",
+        "condition": "card_debited_beneficiary_not_credited",
+        "reversal_deadline_expression": "T+1",
+        "automatic_compensation": true,
+        "compensation_rate": 100
+      },
+      "exclusions_or_caveats": [
+        "Potential compensation estimate, subject to verification"
+      ],
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: RBI Circular RBI/2019-20/67 Item 2(a), last checked 2026-03-30"
+    },
+    {
+      "rule_id": "rbi_failed_imps_transfer",
+      "title": "Harmonisation of Turn Around Time (TAT) - IMPS Failed Transactions",
+      "issuer": "Reserve Bank of India",
+      "circular_or_scheme_date": "2019-09-20",
+      "notification_number": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Annexure Item 3(a)",
+      "effective_date": "2019-10-15",
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "source_type": "RBI Circular",
+      "exact_rule_summary": "Account debited but beneficiary account not credited in IMPS. Auto-reversal within T+1 calendar day. Compensation ₹100 per day of delay beyond T+1.",
+      "applicability_conditions": {
+        "transaction_family": "IMPS",
+        "condition": "account_debited_beneficiary_not_credited",
+        "reversal_deadline_expression": "T+1",
+        "automatic_compensation": true,
+        "compensation_rate": 100
+      },
+      "exclusions_or_caveats": [
+        "Potential compensation estimate, subject to verification"
+      ],
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: RBI Circular RBI/2019-20/67 Item 3(a), last checked 2026-03-30"
+    },
+    {
+      "rule_id": "rbi_delayed_merchant_refund",
+      "title": "Harmonisation of Turn Around Time (TAT) - E-Commerce / Merchant Refunds",
+      "issuer": "Reserve Bank of India",
+      "circular_or_scheme_date": "2019-09-20",
+      "notification_number": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Annexure Item 2(b) & 4(c)",
+      "effective_date": "2019-10-15",
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "source_type": "RBI Circular",
+      "exact_rule_summary": "In merchant refund transactions, once the merchant initiates refund, credit must reach customer account within T+5 calendar days. If delayed beyond T+5 from merchant initiation, compensation ₹100 per day of delay payable by the acquirer/issuer.",
+      "applicability_conditions": {
+        "transaction_family": "MERCHANT_REFUND",
+        "condition": "merchant_initiated_refund_not_credited",
+        "reversal_deadline_expression": "T+5 from merchant initiation",
+        "automatic_compensation": true,
+        "compensation_rate": 100
+      },
+      "exclusions_or_caveats": [
+        "Merchant must first process refund on their platform; if merchant has not initiated refund, customer must contact merchant first",
+        "Potential compensation estimate, subject to verification"
+      ],
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: RBI Circular RBI/2019-20/67 Item 2(b)/4(c), last checked 2026-03-30"
+    },
+    {
+      "rule_id": "npci_wrong_recipient_upi_recovery",
+      "title": "NPCI UPI Dispute Redressal Framework - Wrong Recipient Transfer",
+      "issuer": "National Payments Corporation of India (NPCI) & RBI",
+      "circular_or_scheme_date": "2021-08-01",
+      "notification_number": "NPCI/UPI/OC-87/2020-21 & RBI Master Direction on Digital Payment Security",
+      "effective_date": "2021-08-01",
+      "official_url": "https://www.npci.org.in/what-we-do/upi/dispute-redressal-mechanism",
+      "source_type": "NPCI Operating Circular & RBI Guidelines",
+      "exact_rule_summary": "When a user mistakenly enters wrong VPA/account number and transfers funds, remitter bank must raise an inter-bank recovery request (chargeback/recall) with beneficiary bank. Recovery requires consent of the unintended recipient. No daily compensation applies because failure was due to user input.",
+      "applicability_conditions": {
+        "transaction_family": "UPI_WRONG_RECIPIENT",
+        "condition": "funds_transferred_to_wrong_recipient_by_user",
+        "reversal_deadline_expression": "N/A (Consent-dependent recovery)",
+        "automatic_compensation": false,
+        "compensation_rate": 0
+      },
+      "exclusions_or_caveats": [
+        "No automatic statutory compensation under RBI TAT Circular for wrong recipient entry by customer",
+        "Beneficiary consent is required by beneficiary bank to reverse funds; remitter bank must initiate recovery request",
+        "If bank fails to assist, customer may escalate to NPCI dispute portal and Banking Ombudsman"
+      ],
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: NPCI UPI Dispute Redressal & RBI Master Directions, last checked 2026-03-30"
+    },
+    {
+      "rule_id": "rbi_unauthorized_electronic_transactions_liability",
+      "title": "Customer Protection – Limiting Liability of Customers in Unauthorised Electronic Banking Transactions",
+      "issuer": "Reserve Bank of India",
+      "circular_or_scheme_date": "2017-07-06",
+      "notification_number": "RBI/2017-18/15 DBR.No.Leg.BC.78/09.07.005/2017-18",
+      "effective_date": "2017-07-06",
+      "official_url": "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11040",
+      "source_type": "RBI Circular",
+      "exact_rule_summary": "Zero customer liability if unauthorized transaction is notified to bank within 3 working days (or contributory fraud/negligence on part of bank). Limited liability (max ₹10,000 to ₹25,000 depending on account) if notified within 4 to 7 working days. If reported beyond 7 working days, liability determined by bank board policy. Bank must resolve complaint and reverse value within 90 days. NO daily compensation rate applies.",
+      "applicability_conditions": {
+        "transaction_family": "UNAUTHORIZED_FRAUD",
+        "condition": "unauthorized_electronic_banking_transaction",
+        "golden_hour_timeline_days": 3,
+        "zero_liability_days": 3,
+        "limited_liability_days": 7,
+        "bank_resolution_sla_days": 90,
+        "automatic_compensation": false,
+        "compensation_rate": 0
+      },
+      "exclusions_or_caveats": [
+        "Customer is liable where loss is due to customer's own negligence (such as sharing payment credentials/PIN/OTP) until reported to bank",
+        "Immediate reporting to National Cyber Crime Portal (1930 / cybercrime.gov.in) and written notification to bank are essential",
+        "No daily compensation rate applies under TAT rules"
+      ],
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: RBI Circular DBR.No.Leg.BC.78/09.07.005/2017-18, last checked 2026-03-30"
+    },
+    {
+      "rule_id": "rbi_integrated_ombudsman_scheme_2026",
+      "title": "Reserve Bank–Integrated Ombudsman Scheme",
+      "issuer": "Reserve Bank of India",
+      "circular_or_scheme_date": "2021-11-12",
+      "notification_number": "CEP.CO.PRGF/3571/20.01.040/2021-22",
+      "effective_date": "2021-11-12",
+      "official_url": "https://cms.rbi.org.in",
+      "source_type": "RBI Ombudsman Scheme",
+      "exact_rule_summary": "Customers may file a complaint with the RBI Ombudsman if the Regulated Entity (RE) does not reply within 30 days of receipt of complaint, or if the customer is not satisfied with the RE's response. Bank complaint reference number is mandatory. Portal: https://cms.rbi.org.in",
+      "applicability_conditions": {
+        "complaint_first_made_to_re": true,
+        "waiting_period_days": 30,
+        "requires_bank_reference": true,
+        "portal_url": "https://cms.rbi.org.in"
+      },
+      "exclusions_or_caveats": [
+        "Must first raise complaint with bank/regulated entity and retain acknowledgment/reference number",
+        "Submission happens on the official Reserve Bank of India CMS portal at https://cms.rbi.org.in"
+      ],
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30"
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "upi_p2p_debit_not_credited",
+      "name": "UPI Person-to-Person (P2P): Account debited, beneficiary not credited",
+      "category": "UPI",
+      "circular_row": "RBI/2019-20/67 Annexure Item 4(a)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 4(a)",
+      "tat_days": 1,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 4(a), last checked 2026-03-30",
+      "description": "Customer account debited but beneficiary account not credited in a Person to Person (P2P) transaction."
+    },
+    {
+      "scenario_id": "upi_p2m_merchant_debit_failed",
+      "name": "UPI Person-to-Merchant (P2M): Account debited, confirmation not received at merchant location",
+      "category": "UPI",
+      "circular_row": "RBI/2019-20/67 Annexure Item 4(b)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 4(b)",
+      "tat_days": 5,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 4(b), last checked 2026-03-30",
+      "description": "Customer account debited, but transaction confirmation not received at merchant location (e-commerce or merchant store checkout)."
+    },
+    {
+      "scenario_id": "imps_debit_not_credited",
+      "name": "IMPS: Account debited, beneficiary not credited",
+      "category": "IMPS",
+      "circular_row": "RBI/2019-20/67 Annexure Item 3(a)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 3(a)",
+      "tat_days": 1,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 3(a), last checked 2026-03-30",
+      "description": "Account debited but the beneficiary account is not credited in IMPS transaction."
+    },
+    {
+      "scenario_id": "card_to_card_transfer",
+      "name": "Card to Card: Account debited, not credited",
+      "category": "Cards",
+      "circular_row": "RBI/2019-20/67 Annexure Item 2(a)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 2(a)",
+      "tat_days": 1,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 2(a), last checked 2026-03-30",
+      "description": "Card account debited but beneficiary card account is not credited."
+    },
+    {
+      "scenario_id": "atm_cash_not_dispensed",
+      "name": "ATM: Account debited but cash not dispensed",
+      "category": "ATM",
+      "circular_row": "RBI/2019-20/67 Annexure Item 1(a)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 1(a)",
+      "tat_days": 5,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 1(a), last checked 2026-03-30",
+      "description": "Customer account debited but cash not dispensed at ATM."
+    },
+    {
+      "scenario_id": "delayed_merchant_refund",
+      "name": "Merchant Refund: Delayed beyond T+5 days from refund initiation",
+      "category": "Merchant",
+      "circular_row": "RBI/2019-20/67 Annexure Item 2(b) & 4(c)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 2(b)/4(c)",
+      "tat_days": 5,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 2(b)/4(c), last checked 2026-03-30",
+      "description": "Merchant initiated refund for cancelled order/service, but funds not credited to payer account within T+5 days."
+    },
+    {
+      "scenario_id": "upi_wrong_recipient",
+      "name": "UPI Wrong Recipient: Transferred to incorrect VPA or account",
+      "category": "UPI",
+      "circular_row": "NPCI UPI Operating Circular OC-87 & RBI Master Directions",
+      "circular_reference": "NPCI UPI Dispute Redressal Guidelines OC-87 & RBI Master Direction",
+      "tat_days": 0,
+      "day_basis": "calendar",
+      "compensation_per_day": 0,
+      "auto_reversal": false,
+      "official_url": "https://www.npci.org.in/what-we-do/upi/dispute-redressal-mechanism",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: NPCI Dispute Redressal & RBI Master Directions, last checked 2026-03-30",
+      "description": "User mistakenly transferred money to wrong account or VPA. Remitter bank initiates recovery request with beneficiary bank; no daily compensation applies."
+    },
+    {
+      "scenario_id": "unauthorized_fraud_golden_hour",
+      "name": "Unauthorized Electronic Transaction / Fraud: Golden Hour reporting",
+      "category": "Fraud",
+      "circular_row": "RBI Circular DBR.No.Leg.BC.78/09.07.005/2017-18",
+      "circular_reference": "RBI Circular DBR.No.Leg.BC.78/09.07.005/2017-18 Item 6",
+      "tat_days": 3,
+      "day_basis": "working",
+      "compensation_per_day": 0,
+      "auto_reversal": false,
+      "official_url": "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11040",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular DBR.No.Leg.BC.78/09.07.005/2017-18, last checked 2026-03-30",
+      "description": "Unauthorized transaction notified within 3 working days qualifies for zero customer liability. Immediate steps: call 1930, report to cybercrime.gov.in, block account, report in writing to bank."
+    }
+  ]
+}

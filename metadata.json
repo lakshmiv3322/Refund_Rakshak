@@ -1,0 +1,7 @@
+{
+  "name": "RefundRakshak",
+  "description": "Multilingual AI agent for Indian financial-service grievance pursuit, UPI failed debit disputes, automated TAT tracking, and RBI Ombudsman escalation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

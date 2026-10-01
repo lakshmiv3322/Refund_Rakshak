@@ -1,0 +1,74 @@
+{
+  "banks": [
+    {
+      "bank_id": "sbi",
+      "name": "State Bank of India",
+      "aliases": ["sbi", "state bank", "state bank of india"],
+      "grievance_email": "customercare@sbi.co.in",
+      "nodal_officer_email": "nodalofficer@sbi.co.in",
+      "escalation_portal_url": "https://crcf.sbi.co.in/ccf/",
+      "source_url": "https://sbi.co.in/web/customer-care/grievance-redressal-mechanism",
+      "verified_at": "2026-03-30"
+    },
+    {
+      "bank_id": "hdfc",
+      "name": "HDFC Bank",
+      "aliases": ["hdfc", "hdfc bank", "hdfc bank ltd"],
+      "grievance_email": "grievance.redressal@hdfcbank.com",
+      "nodal_officer_email": "pno@hdfcbank.com",
+      "escalation_portal_url": "https://www.hdfcbank.com/personal/need-help/grievance-redressal-digital",
+      "source_url": "https://www.hdfcbank.com/personal/need-help/grievance-redressal-digital",
+      "verified_at": "2026-03-30"
+    },
+    {
+      "bank_id": "icici",
+      "name": "ICICI Bank",
+      "aliases": ["icici", "icici bank", "icici bank ltd"],
+      "grievance_email": "headservicequality@icicibank.com",
+      "nodal_officer_email": "pno@icicibank.com",
+      "escalation_portal_url": "https://www.icicibank.com/complaints/complaints",
+      "source_url": "https://www.icicibank.com/notice-board/grievance-redressal",
+      "verified_at": "2026-03-30"
+    },
+    {
+      "bank_id": "axis",
+      "name": "Axis Bank",
+      "aliases": ["axis", "axis bank", "axis bank ltd"],
+      "grievance_email": "nodal.officer@axisbank.com",
+      "nodal_officer_email": "pno@axisbank.com",
+      "escalation_portal_url": "https://www.axisbank.com/support",
+      "source_url": "https://www.axisbank.com/support/grievance-redressal",
+      "verified_at": "2026-03-30"
+    },
+    {
+      "bank_id": "kotak",
+      "name": "Kotak Mahindra Bank",
+      "aliases": ["kotak", "kotak mahindra", "kotak bank"],
+      "grievance_email": "service.redressal@kotak.com",
+      "nodal_officer_email": "nodalofficer@kotak.com",
+      "escalation_portal_url": "https://www.kotak.com/en/customer-care/grievance-redressal.html",
+      "source_url": "https://www.kotak.com/en/customer-care/grievance-redressal.html",
+      "verified_at": "2026-03-30"
+    },
+    {
+      "bank_id": "pnb",
+      "name": "Punjab National Bank",
+      "aliases": ["pnb", "punjab national bank"],
+      "grievance_email": "care@pnb.co.in",
+      "nodal_officer_email": "pno@pnb.co.in",
+      "escalation_portal_url": "https://www.pnbindia.in/Grievance-Redressal.html",
+      "source_url": "https://www.pnbindia.in/Grievance-Redressal.html",
+      "verified_at": "2026-03-30"
+    },
+    {
+      "bank_id": "bob",
+      "name": "Bank of Baroda",
+      "aliases": ["bob", "bank of baroda"],
+      "grievance_email": "gm.ops.ho@bankofbaroda.com",
+      "nodal_officer_email": "pno@bankofbaroda.com",
+      "escalation_portal_url": "https://www.bankofbaroda.in/grievance-redressal",
+      "source_url": "https://www.bankofbaroda.in/grievance-redressal",
+      "verified_at": "2026-03-30"
+    }
+  ]
+}

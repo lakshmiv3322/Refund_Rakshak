@@ -1,0 +1,12 @@
+data/*.sqlite*
+node_modules
+dist
+.env
+.env.local
+test
+.git
+.github
+*.log
+.DS_Store
+coverage
+data/db.json
