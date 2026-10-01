@@ -4,7 +4,6 @@ import {
   Building2,
   Clock,
   Sparkles,
-  RotateCcw,
   PlusCircle,
   FileText,
   Mail,
@@ -18,10 +17,15 @@ import {
   X,
   Check,
   Download,
-  Info
+  KeyRound,
+  Trash2,
+  Lock,
+  PhoneCall,
+  ExternalLink
 } from "lucide-react";
 import { translations, type SupportedLanguage } from "./i18n/translations";
 import { Landing } from "./components/Landing";
+import { UserCaseDashboard } from "./components/UserCaseDashboard";
 import { ChatPanel } from "./components/ChatPanel";
 import { AgentStepsPanel, type AgentStepItem } from "./components/AgentStepsPanel";
 import { CaseTimeline } from "./components/CaseTimeline";
@@ -33,23 +37,41 @@ import { SafetyPage } from "./components/SafetyPage";
 
 export default function App() {
   // Navigation & Theme
-  const [currentView, setCurrentView] = useState<"landing" | "workspace" | "b2b" | "safety">("landing");
+  const [currentView, setCurrentView] = useState<"landing" | "workspace" | "dashboard" | "b2b" | "safety">("landing");
   const [userLanguage, setUserLanguage] = useState<SupportedLanguage>("en");
   const [isDark, setIsDark] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<"chat" | "timeline" | "evidence" | "outbox" | "rules">("chat");
 
+  // Dev simulation flag: ONLY true if URL has ?dev=1 AND server reports sim_time_enabled
+  const [isDevMode, setIsDevMode] = useState<boolean>(false);
+
+  // User Identity & Session (Requirement 8)
+  const [sessionToken, setSessionToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("refundrakshak_session_token");
+    } catch {
+      return null;
+    }
+  });
+  const [sessionUser, setSessionUser] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("refundrakshak_session_user");
+    } catch {
+      return null;
+    }
+  });
+
   // Case State
-  const [caseId, setCaseId] = useState<string>("RR-DEMO-001");
+  const [caseId, setCaseId] = useState<string>("");
   const [caseState, setCaseState] = useState<any>(null);
   const [casesList, setCasesList] = useState<any[]>([]);
-  const [isDemoActive, setIsDemoActive] = useState<boolean>(true);
 
   // Chat & Agent Reasoning
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([
     {
       role: "assistant",
       content:
-        "Namaste! I am RefundRakshak, your production grievance copilot for Indian UPI & payment failures. I extract evidence, apply statutory RBI circulars, prepare escalation drafts, and help recover your money with your explicit approval."
+        "Namaste! I am RefundRakshak, your production grievance copilot for Indian UPI & payment failures. I extract evidence, apply statutory RBI turnaround circulars, compute your ₹100/day compensation, and prepare escalation drafts with your explicit approval."
     }
   ]);
   const [inputMessage, setInputMessage] = useState("");
@@ -61,6 +83,7 @@ export default function App() {
 
   // Evidence Attachment
   const [selectedImage, setSelectedImage] = useState<{ base64: string; mime: string; name: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Tokens & Approvals
   const [caseTokens, setCaseTokens] = useState<Record<string, string>>(() => {
@@ -107,9 +130,13 @@ export default function App() {
   };
 
   const getAuthHeaders = (id?: string): Record<string, string> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (sessionToken) {
+      headers["Authorization"] = `Bearer ${sessionToken}`;
+      return headers;
+    }
     const targetId = id || caseId;
     const token = caseTokens[targetId];
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
       headers["x-case-token"] = token;
@@ -122,12 +149,18 @@ export default function App() {
       const res = await fetch("/api/cases", { headers: getAuthHeaders() });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data)) setCasesList(data);
+        if (Array.isArray(data)) {
+          setCasesList(data);
+          if (!caseId && data.length > 0) {
+            loadCase(data[0].case_id);
+          }
+        }
       }
     } catch (_) {}
   };
 
   const loadCase = async (id: string) => {
+    if (!id) return;
     try {
       const res = await fetch(`/api/cases/${id}`, { headers: getAuthHeaders(id) });
       if (res.ok) {
@@ -159,24 +192,29 @@ export default function App() {
     }
   };
 
-  // Initial load
+  // Initial load: check health and dev query param
   useEffect(() => {
-    fetchCasesList();
-    loadCase(caseId);
+    const urlParams = new URLSearchParams(window.location.search);
+    const devQuery = urlParams.get("dev") === "1";
+
     fetch("/api/health")
       .then((r) => r.json())
       .then((d) => {
-        if (d?.demo_mode !== undefined) setIsDemoActive(d.demo_mode);
+        if (devQuery && d?.sim_time_enabled) {
+          setIsDevMode(true);
+        }
       })
       .catch(() => {});
-  }, []);
+
+    fetchCasesList();
+  }, [sessionToken]);
 
   const handleCreateNewCase = async () => {
     try {
       const res = await fetch("/api/cases", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language: userLanguage })
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ language: userLanguage, consent_given: true })
       });
       if (res.ok) {
         const newCase = await res.json();
@@ -188,66 +226,18 @@ export default function App() {
         setMessages([
           {
             role: "assistant",
-            content: `Namaste! New grievance case ${newCase.case_id} initialized. Please describe the payment failure or upload a screenshot.`
+            content: `Namaste! Case ${newCase.case_id} initialized. Please describe the payment failure or upload a screenshot.`
           }
         ]);
         setAgentSteps([]);
         setActivePlan([]);
         fetchCasesList();
         setCurrentView("workspace");
-        showToast(`Created new grievance case: ${newCase.case_id}`, "success");
+        showToast(`Created grievance case: ${newCase.case_id}`, "success");
       }
     } catch (e) {
       showToast("Error creating case", "error");
     }
-  };
-
-  const handleResetDemo = async () => {
-    try {
-      const res = await fetch("/api/cases/RR-DEMO-001/reset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.token) {
-          saveTokenForCase("RR-DEMO-001", data.token);
-        }
-        setCaseId("RR-DEMO-001");
-        setCaseState(data.case_state);
-        setMessages(
-          data.case_state.chat_history.map((h: any) => ({
-            role: h.role === "user" ? "user" : "assistant",
-            content: h.text
-          }))
-        );
-        fetchCasesList();
-        setCurrentView("workspace");
-        showToast("Demo case RR-DEMO-001 reset to verified seed state.", "success");
-      }
-    } catch (e) {
-      showToast("Error resetting demo case", "error");
-    }
-  };
-
-  // One-Click Demo Scenarios (60 seconds for Hackathon judges)
-  const handleSelectDemoScenario = async (type: "upi" | "fraud" | "merchant") => {
-    await handleCreateNewCase();
-    let prompt = "";
-    if (type === "upi") {
-      prompt =
-        "My UPI payment of ₹2,400 to my friend was debited from SBI on 2026-09-22, but my friend never received the money. Reference number is UTR9988112233. Please help me claim my statutory compensation.";
-    } else if (type === "fraud") {
-      prompt =
-        "I did not make this payment! Someone hacked my mobile device and transferred ₹15,000 without my authorization.";
-    } else if (type === "merchant") {
-      prompt =
-        "I cancelled a Swiggy food order of ₹850 on 2026-09-25. The merchant says refunded but the amount is not in my bank.";
-    }
-
-    setInputMessage(prompt);
-    setCurrentView("workspace");
-    setActiveTab("chat");
   };
 
   // Image file handler
@@ -256,8 +246,8 @@ export default function App() {
       showToast("Please upload a PNG or JPEG screenshot image", "error");
       return;
     }
-    if (file.size > 4 * 1024 * 1024) {
-      showToast("Image must be smaller than 4MB", "error");
+    if (file.size > 5 * 1024 * 1024) {
+      showToast("Image must be smaller than 5MB", "error");
       return;
     }
     const reader = new FileReader();
@@ -268,15 +258,21 @@ export default function App() {
         mime: file.type,
         name: file.name
       });
-      showToast(`Attached evidence: ${file.name}`, "info");
+      showToast(`Attached receipt: ${file.name}`, "info");
     };
     reader.readAsDataURL(file);
   };
 
-  // Send message to Agent with SSE streaming support
+  // Send message to Agent with SSE live streaming support (Requirement 14)
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!inputMessage.trim() && !selectedImage) || loading) return;
+
+    let targetCaseId = caseId;
+    if (!targetCaseId) {
+      await handleCreateNewCase();
+      return;
+    }
 
     const userText = inputMessage.trim();
     const imagePayload = selectedImage;
@@ -286,13 +282,18 @@ export default function App() {
 
     setMessages((prev) => [...prev, { role: "user", content: userText || "[Uploaded Evidence Screenshot]" }]);
     setLoading(true);
+    setIsStreaming(true);
+    setStreamToken("");
 
     try {
-      const res = await fetch("/api/agent/run", {
+      const res = await fetch("/api/agent/run?stream=true", {
         method: "POST",
-        headers: getAuthHeaders(caseId),
+        headers: {
+          ...getAuthHeaders(targetCaseId),
+          Accept: "text/event-stream"
+        },
         body: JSON.stringify({
-          case_id: caseId,
+          case_id: targetCaseId,
           message: userText,
           language: userLanguage,
           simulated_now: caseState?.simulated_now,
@@ -306,95 +307,98 @@ export default function App() {
         throw new Error(errJson?.error?.message || `Request failed with status ${res.status}`);
       }
 
-      const data = await res.json();
-      if (data.token) {
-        saveTokenForCase(data.case_id, data.token);
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          let currentEvent = "";
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              currentEvent = line.replace("event:", "").trim();
+            } else if (line.startsWith("data:")) {
+              const dataStr = line.replace("data:", "").trim();
+              try {
+                const parsed = JSON.parse(dataStr);
+                if (currentEvent === "token" && parsed.token) {
+                  setStreamToken((prev) => prev + parsed.token);
+                } else if (currentEvent === "step") {
+                  if (parsed.type === "plan" && Array.isArray(parsed.plan)) {
+                    setActivePlan(parsed.plan);
+                  }
+                  setAgentSteps((prev) => [...prev, parsed]);
+                } else if (currentEvent === "done") {
+                  if (parsed.token) {
+                    saveTokenForCase(parsed.case_id, parsed.token);
+                  }
+                  if (parsed.case_state) {
+                    setCaseState(parsed.case_state);
+                    setCaseId(parsed.case_id);
+                  }
+                  if (parsed.message) {
+                    setMessages((prev) => [...prev, { role: "assistant", content: parsed.message }]);
+                  }
+                  fetchCasesList();
+                }
+              } catch (_) {}
+            }
+          }
+        }
       }
-      if (data.case_state) {
-        setCaseState(data.case_state);
-        setCaseId(data.case_id);
-      }
-      if (data.trace) {
-        setAgentSteps(
-          data.trace.map((tr: any) => ({
-            type: "tool_execution",
-            tool: tr.tool_name,
-            summary: tr.summary,
-            status: tr.status,
-            timestamp: tr.timestamp
-          }))
-        );
-      }
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.message || "Processed grievance using verified RBI rules." }
-      ]);
     } catch (err: any) {
-      showToast(err.message || "Error communicating with agent", "error");
+      showToast(err.message || "Failed to process message", "error");
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `⚠️ Error: ${err.message || "Unable to reach agent service."}` }
+        {
+          role: "assistant",
+          content: "I encountered a processing issue. Please verify your connection or try again."
+        }
       ]);
     } finally {
       setLoading(false);
-      fetchCasesList();
+      setIsStreaming(false);
+      setStreamToken("");
     }
   };
 
-  // Advance time simulation
-  const handleSimulateTime = async (days: number) => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/cases/${caseId}/simulate-time`, {
-        method: "POST",
-        headers: getAuthHeaders(caseId),
-        body: JSON.stringify({ days })
-      });
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.error?.message || "Simulation error");
-      }
-      const data = await res.json();
-      if (data.case_state) {
-        setCaseState(data.case_state);
-      }
-      showToast(`Clock advanced +${days} days. Autonomous SLA engine triggered.`, "success");
-    } catch (err: any) {
-      showToast(err.message || "Simulation error", "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Approve action
+  // Human Approval Handlers
   const handleApproveAction = async (actionId: string, confirmedCustom = false) => {
+    setLoading(true);
     try {
       const customRecipient = recipientEdits[actionId];
       const res = await fetch(`/api/actions/${actionId}/approve`, {
         method: "POST",
         headers: getAuthHeaders(caseId),
         body: JSON.stringify({
-          recipient: customRecipient,
-          confirm_custom_recipient: confirmedCustom
+          custom_recipient: customRecipient,
+          confirmed_custom_recipient: confirmedCustom
         })
       });
 
       const data = await res.json();
       if (!res.ok) {
-        if (data.error?.code === "UNCONFIRMED_CUSTOM_RECIPIENT") {
-          setConfirmCustomModal({ actionId, recipient: data.error.recipient });
+        if (data.requires_confirmation) {
+          setConfirmCustomModal({ actionId, recipient: data.recipient });
           return;
         }
-        showToast(data.error?.message || "Failed to approve action", "error");
-        return;
+        throw new Error(data?.error?.message || "Failed to approve action");
       }
 
-      if (data.case_state) {
-        setCaseState(data.case_state);
-      }
-      showToast("Complaint approved and dispatched!", "success");
+      showToast("Action approved and executed!", "success");
+      loadCase(caseId);
+      setActiveTab("outbox");
     } catch (err: any) {
       showToast(err.message || "Approval failed", "error");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -410,6 +414,143 @@ export default function App() {
       }
     } catch (_) {
       showToast("Failed to reject action", "error");
+    }
+  };
+
+  // Record Bank Complaint Reference Number (Requirement 10)
+  const handleRecordBankReference = async (targetCaseId: string, ref: string) => {
+    try {
+      const res = await fetch(`/api/cases/${targetCaseId}/bank-reference`, {
+        method: "PATCH",
+        headers: getAuthHeaders(targetCaseId),
+        body: JSON.stringify({ bank_complaint_reference: ref })
+      });
+      if (res.ok) {
+        showToast("Bank reference recorded successfully!", "success");
+        loadCase(targetCaseId);
+        fetchCasesList();
+      } else {
+        const err = await res.json().catch(() => null);
+        showToast(err?.error?.message || "Failed to record reference", "error");
+      }
+    } catch (e: any) {
+      showToast(e.message || "Error recording reference", "error");
+    }
+  };
+
+  // Resolve Case (Requirement 9)
+  const handleResolveCase = async (targetCaseId: string, amount: number, outcome: string) => {
+    try {
+      const res = await fetch(`/api/cases/${targetCaseId}/resolve`, {
+        method: "POST",
+        headers: getAuthHeaders(targetCaseId),
+        body: JSON.stringify({ amount_recovered: amount, outcome })
+      });
+      if (res.ok) {
+        showToast("Case marked as resolved!", "success");
+        loadCase(targetCaseId);
+        fetchCasesList();
+      } else {
+        const err = await res.json().catch(() => null);
+        showToast(err?.error?.message || "Failed to resolve case", "error");
+      }
+    } catch (e: any) {
+      showToast(e.message || "Error resolving case", "error");
+    }
+  };
+
+  // Export Case JSON (Requirement 8)
+  const handleExportCase = (targetCaseId: string) => {
+    window.open(`/api/cases/${targetCaseId}/export`, "_blank");
+  };
+
+  // Delete User Data (Requirement 8)
+  const handleDeleteUserData = async () => {
+    try {
+      const res = await fetch("/api/user/data", {
+        method: "DELETE",
+        headers: getAuthHeaders()
+      });
+      if (res.ok) {
+        localStorage.removeItem("refundrakshak_tokens");
+        localStorage.removeItem("refundrakshak_session_token");
+        localStorage.removeItem("refundrakshak_session_user");
+        setCaseTokens({});
+        setSessionToken(null);
+        setSessionUser(null);
+        setCasesList([]);
+        setCaseId("");
+        setCaseState(null);
+        showToast("All personal grievance data purged permanently.", "success");
+        setCurrentView("landing");
+      }
+    } catch (e) {
+      showToast("Error deleting user data", "error");
+    }
+  };
+
+  // OTP Request & Verify (Requirement 8)
+  const handleRequestOtp = async (identifier: string) => {
+    const res = await fetch("/api/auth/request-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(err?.error?.message || "Failed to request code");
+    }
+    return await res.json();
+  };
+
+  const handleVerifyOtp = async (identifier: string, code: string) => {
+    const res = await fetch("/api/auth/verify-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier, code })
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data.session_token) {
+      setSessionToken(data.session_token);
+      setSessionUser(data.user);
+      localStorage.setItem("refundrakshak_session_token", data.session_token);
+      localStorage.setItem("refundrakshak_session_user", data.user);
+      fetchCasesList();
+      showToast(`Welcome back, ${data.user}!`, "success");
+      return true;
+    }
+    return false;
+  };
+
+  const handleSignOut = () => {
+    localStorage.removeItem("refundrakshak_session_token");
+    localStorage.removeItem("refundrakshak_session_user");
+    setSessionToken(null);
+    setSessionUser(null);
+    fetchCasesList();
+    showToast("Signed out successfully", "info");
+  };
+
+  // Time simulation (dev mode only)
+  const handleSimulateTime = async (days = 7) => {
+    if (!caseId || !isDevMode) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/simulate-time?dev=1`, {
+        method: "POST",
+        headers: getAuthHeaders(caseId),
+        body: JSON.stringify({ days, dev: "1" })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCaseState(data.case_state);
+        showToast(`Dev clock advanced +${days} days. Checked follow-ups.`, "info");
+      }
+    } catch (_) {
+      showToast("Time simulation failed", "error");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -439,6 +580,19 @@ export default function App() {
 
   return (
     <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${isDark ? "bg-slate-950 text-slate-100" : "bg-slate-50 text-slate-900"}`}>
+      {/* Hidden File Input for Evidence Upload */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept="image/png,image/jpeg,image/jpg"
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files && e.target.files[0]) {
+            handleImageSelect(e.target.files[0]);
+          }
+        }}
+      />
+
       {/* Toast Notification */}
       {toast && (
         <div className="fixed bottom-6 right-6 z-50 flex items-center space-x-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 dark:border-slate-200 text-xs font-semibold animate-in slide-in-from-bottom-5">
@@ -454,7 +608,7 @@ export default function App() {
 
       {/* Custom Recipient Confirmation Modal */}
       {confirmCustomModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center space-x-3 text-amber-600 dark:text-amber-400">
               <AlertTriangle className="w-6 h-6 flex-shrink-0" />
@@ -463,7 +617,7 @@ export default function App() {
               </h3>
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-              The address <span className="font-mono font-bold text-slate-900 dark:text-white">"{confirmCustomModal.recipient}"</span> is not found in our verified bank directory (data/banks.json). To prevent security issues, please confirm you intend to dispatch to this address.
+              The address <span className="font-mono font-bold text-slate-900 dark:text-white">"{confirmCustomModal.recipient}"</span> differs from our verified bank directory. To ensure delivery safety, please confirm you intend to dispatch to this address.
             </p>
             <div className="flex items-center justify-end space-x-2 pt-2">
               <button
@@ -478,9 +632,9 @@ export default function App() {
                   setConfirmCustomModal(null);
                   handleApproveAction(actId, true);
                 }}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 transition shadow-md shadow-blue-700/25"
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 transition shadow-md"
               >
-                I Confirm This Address
+                Confirm Address
               </button>
             </div>
           </div>
@@ -492,7 +646,7 @@ export default function App() {
         <div className="flex items-center space-x-3">
           <div
             onClick={() => setCurrentView("landing")}
-            className="w-10 h-10 rounded-xl bg-blue-700 flex items-center justify-center shadow-lg shadow-blue-700/20 cursor-pointer text-white"
+            className="w-10 h-10 rounded-xl bg-blue-700 flex items-center justify-center shadow-md shadow-blue-700/20 cursor-pointer text-white"
           >
             <ShieldCheck className="w-6 h-6" />
           </div>
@@ -506,17 +660,16 @@ export default function App() {
                 RefundRakshak
               </span>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-900">
-                {t.productionCopilot}
+                RBI Statutory Agent
               </span>
-              {isDemoActive && (
-                <span className="hidden sm:inline-flex items-center space-x-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                  <span>{t.demoModeBadge}</span>
+              {isDevMode && (
+                <span className="inline-flex items-center space-x-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300">
+                  <span>?dev=1</span>
                 </span>
               )}
             </div>
             <div className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:block">
-              {t.tagline}
+              {t.tagline || "Autonomous Indian Payment Grievance Copilot"}
             </div>
           </div>
         </div>
@@ -527,29 +680,45 @@ export default function App() {
           <nav className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-semibold">
             <button
               onClick={() => setCurrentView("landing")}
-              className={`px-3 py-1.5 rounded-lg transition ${
+              className={`min-h-[36px] px-3 py-1.5 rounded-lg transition ${
                 currentView === "landing"
-                  ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-sm"
+                  ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-xs"
                   : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
               Overview
             </button>
             <button
-              onClick={() => setCurrentView("workspace")}
-              className={`px-3 py-1.5 rounded-lg transition ${
-                currentView === "workspace"
-                  ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-sm"
+              onClick={() => setCurrentView("dashboard")}
+              className={`min-h-[36px] px-3 py-1.5 rounded-lg transition ${
+                currentView === "dashboard"
+                  ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-xs"
                   : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
-              Copilot
+              My Cases
+            </button>
+            <button
+              onClick={() => {
+                if (!caseId && casesList.length === 0) {
+                  handleCreateNewCase();
+                } else {
+                  setCurrentView("workspace");
+                }
+              }}
+              className={`min-h-[36px] px-3 py-1.5 rounded-lg transition ${
+                currentView === "workspace"
+                  ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-xs"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              }`}
+            >
+              Complaint Copilot
             </button>
             <button
               onClick={() => setCurrentView("b2b")}
-              className={`px-3 py-1.5 rounded-lg transition ${
+              className={`min-h-[36px] px-3 py-1.5 rounded-lg transition ${
                 currentView === "b2b"
-                  ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-sm"
+                  ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-xs"
                   : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
@@ -557,9 +726,9 @@ export default function App() {
             </button>
             <button
               onClick={() => setCurrentView("safety")}
-              className={`px-3 py-1.5 rounded-lg transition ${
+              className={`min-h-[36px] px-3 py-1.5 rounded-lg transition ${
                 currentView === "safety"
-                  ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-sm"
+                  ? "bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 shadow-xs"
                   : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               }`}
             >
@@ -567,24 +736,25 @@ export default function App() {
             </button>
           </nav>
 
-          {/* Language Selector */}
+          {/* Language Selector (Includes Bengali) */}
           <select
             value={userLanguage}
             onChange={(e) => setUserLanguage(e.target.value as SupportedLanguage)}
-            className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs rounded-xl px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:border-blue-600 font-medium"
+            className="min-h-[36px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs rounded-xl px-2.5 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:border-blue-600 font-medium"
           >
             <option value="en">English (IN)</option>
             <option value="hi">हिंदी (Hindi)</option>
             <option value="ta">தமிழ் (Tamil)</option>
             <option value="te">తెలుగు (Telugu)</option>
             <option value="mr">मराठी (Marathi)</option>
+            <option value="bn">বাংলা (Bengali)</option>
           </select>
 
           {/* Theme Toggle */}
           <button
             onClick={() => setIsDark(!isDark)}
             title="Toggle Light/Dark Theme"
-            className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            className="min-h-[36px] min-w-[36px] p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition flex items-center justify-center"
           >
             {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-600" />}
           </button>
@@ -599,10 +769,31 @@ export default function App() {
             onStartGrievance={() => {
               handleCreateNewCase();
             }}
-            onSelectDemoScenario={handleSelectDemoScenario}
-            onSwitchToB2B={() => setCurrentView("b2b")}
+            onViewDashboard={() => setCurrentView("dashboard")}
             onViewSafety={() => setCurrentView("safety")}
             isDark={isDark}
+          />
+        )}
+
+        {currentView === "dashboard" && (
+          <UserCaseDashboard
+            t={t}
+            cases={casesList}
+            currentCaseId={caseId}
+            onSelectCase={(id) => {
+              loadCase(id);
+              setCurrentView("workspace");
+            }}
+            onCreateNewCase={handleCreateNewCase}
+            onRecordBankReference={handleRecordBankReference}
+            onResolveCase={handleResolveCase}
+            onExportCase={handleExportCase}
+            onDeleteUserData={handleDeleteUserData}
+            onRequestOtp={handleRequestOtp}
+            onVerifyOtp={handleVerifyOtp}
+            sessionUser={sessionUser}
+            onSignOut={handleSignOut}
+            loading={loading}
           />
         )}
 
@@ -626,14 +817,14 @@ export default function App() {
         {currentView === "workspace" && (
           <div className="space-y-6">
             {/* Case Quick Bar */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-3">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center space-x-3">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                     ACTIVE CASE:
                   </span>
                   <span className="font-mono font-bold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950 px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-900 text-xs">
-                    {caseId}
+                    {caseId || "Creating..."}
                   </span>
 
                   {casesList.length > 1 && (
@@ -654,26 +845,17 @@ export default function App() {
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={handleCreateNewCase}
-                    className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-semibold flex items-center space-x-1.5 transition"
+                    className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-semibold flex items-center space-x-1.5 transition"
                   >
                     <PlusCircle className="w-3.5 h-3.5" />
                     <span>New Case</span>
-                  </button>
-
-                  <button
-                    onClick={handleResetDemo}
-                    title="Reset Demo Case RR-DEMO-001"
-                    className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-semibold flex items-center space-x-1.5 transition"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Reset Demo</span>
                   </button>
 
                   <a
                     href={`/api/cases/${caseId}/evidence-pack`}
                     target="_blank"
                     rel="noreferrer"
-                    className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold flex items-center space-x-1.5 transition"
+                    className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold flex items-center space-x-1.5 transition"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Evidence PDF</span>
@@ -681,7 +863,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* One-Line Summary under ACTIVE CASE */}
+              {/* Status & Compensation Summary */}
               {(() => {
                 const facts = caseState?.transaction_facts || {};
                 const amountDisplay = facts.amount !== null && facts.amount !== undefined ? `₹${facts.amount}` : "Pending";
@@ -722,17 +904,16 @@ export default function App() {
 
             {/* Main Copilot Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Left Column (5 cols): Money Clock, Agent Steps, Case Meta */}
+              {/* Left Column (5 cols): Money Clock, Agent Steps */}
               <div className="lg:col-span-5 space-y-6">
-                {/* Statutory Money Clock */}
                 <MoneyClockCard
                   t={t}
                   caseState={caseState}
                   onSimulateTime={handleSimulateTime}
                   loading={loading}
+                  isDevMode={isDevMode}
                 />
 
-                {/* What the Agent is Doing Panel (Phase 3, Item 9) */}
                 <AgentStepsPanel
                   t={t}
                   activePlan={activePlan}
@@ -748,33 +929,33 @@ export default function App() {
                 <div className="flex items-center space-x-2 border-b border-slate-200 dark:border-slate-800 pb-2">
                   <button
                     onClick={() => setActiveTab("chat")}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
+                    className={`min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
                       activeTab === "chat"
-                        ? "bg-blue-700 text-white shadow-sm"
+                        ? "bg-blue-700 text-white shadow-xs"
                         : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                     }`}
                   >
                     <MessageSquare className="w-3.5 h-3.5" />
-                    <span>{t.tabChat}</span>
+                    <span>{t.tabChat || "Complaint Assistant"}</span>
                   </button>
 
                   <button
                     onClick={() => setActiveTab("timeline")}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
+                    className={`min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
                       activeTab === "timeline"
-                        ? "bg-blue-700 text-white shadow-sm"
+                        ? "bg-blue-700 text-white shadow-xs"
                         : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                     }`}
                   >
                     <Clock className="w-3.5 h-3.5" />
-                    <span>{t.tabTimeline}</span>
+                    <span>{t.tabTimeline || "Milestones"}</span>
                   </button>
 
                   <button
                     onClick={() => setActiveTab("evidence")}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
+                    className={`min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
                       activeTab === "evidence"
-                        ? "bg-blue-700 text-white shadow-sm"
+                        ? "bg-blue-700 text-white shadow-xs"
                         : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                     }`}
                   >
@@ -784,16 +965,16 @@ export default function App() {
 
                   <button
                     onClick={() => setActiveTab("outbox")}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
+                    className={`min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
                       activeTab === "outbox"
-                        ? "bg-blue-700 text-white shadow-sm"
+                        ? "bg-blue-700 text-white shadow-xs"
                         : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                     }`}
                   >
                     <Mail className="w-3.5 h-3.5" />
-                    <span>{t.tabOutbox}</span>
+                    <span>{t.tabOutbox || "Approvals"}</span>
                     {(caseState?.pending_actions || []).some(
-                      (a: any) => a.status === "pending_human_approval"
+                      (a: any) => a.status === "pending_approval" || a.status === "pending_human_approval"
                     ) && (
                       <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
                     )}
@@ -811,15 +992,13 @@ export default function App() {
                     loading={loading}
                     selectedImage={selectedImage}
                     onImageClear={() => setSelectedImage(null)}
-                    onOpenFileSelector={() => {
-                      setActiveTab("evidence");
-                    }}
+                    onOpenFileSelector={() => fileInputRef.current?.click()}
                     userLanguage={userLanguage}
-                    onSelectSuggestion={(sug) => {
-                      setInputMessage(sug);
-                    }}
                     isStreaming={isStreaming}
                     streamToken={streamToken}
+                    caseState={caseState}
+                    isDevMode={isDevMode}
+                    onSelectSuggestion={(txt) => setInputMessage(txt)}
                   />
                 )}
 
@@ -827,7 +1006,7 @@ export default function App() {
                   <CaseTimeline
                     t={t}
                     caseState={caseState}
-                    onSimulateTime={handleSimulateTime}
+                    onSimulateTime={isDevMode ? handleSimulateTime : undefined}
                     loading={loading}
                   />
                 )}
@@ -835,15 +1014,11 @@ export default function App() {
                 {activeTab === "evidence" && (
                   <EvidenceUploader
                     t={t}
+                    caseState={caseState}
                     selectedImage={selectedImage}
                     onImageSelect={handleImageSelect}
                     onImageClear={() => setSelectedImage(null)}
-                    caseState={caseState}
                     loading={loading}
-                    onConfirmExtractedFacts={() => {
-                      showToast("Extracted facts confirmed. Ready for drafting.", "success");
-                      setActiveTab("chat");
-                    }}
                   />
                 )}
 
@@ -853,10 +1028,9 @@ export default function App() {
                     caseState={caseState}
                     onApproveAction={handleApproveAction}
                     onRejectAction={handleRejectAction}
-                    onUpdateRecipient={(actId, newRec) => {
-                      setRecipientEdits({ ...recipientEdits, [actId]: newRec });
-                      showToast(`Updated recipient to ${newRec}`, "info");
-                    }}
+                    onUpdateRecipient={(actId, newRec) =>
+                      setRecipientEdits((prev) => ({ ...prev, [actId]: newRec }))
+                    }
                     loading={loading}
                   />
                 )}
@@ -866,45 +1040,50 @@ export default function App() {
         )}
       </main>
 
-      {/* Mobile Bottom Tab Bar (Phase 4, Item 16) */}
-      <div className="sm:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-900/95 border-t border-slate-200 dark:border-slate-800 backdrop-blur px-3 py-2 flex items-center justify-around">
-        <button
-          onClick={() => setCurrentView("landing")}
-          className={`flex flex-col items-center space-y-0.5 text-[10px] font-bold ${
-            currentView === "landing" ? "text-blue-700 dark:text-blue-400" : "text-slate-400"
-          }`}
-        >
-          <ShieldCheck className="w-4 h-4" />
-          <span>Home</span>
-        </button>
-        <button
-          onClick={() => setCurrentView("workspace")}
-          className={`flex flex-col items-center space-y-0.5 text-[10px] font-bold ${
-            currentView === "workspace" ? "text-blue-700 dark:text-blue-400" : "text-slate-400"
-          }`}
-        >
-          <MessageSquare className="w-4 h-4" />
-          <span>Copilot</span>
-        </button>
-        <button
-          onClick={() => setCurrentView("b2b")}
-          className={`flex flex-col items-center space-y-0.5 text-[10px] font-bold ${
-            currentView === "b2b" ? "text-blue-700 dark:text-blue-400" : "text-slate-400"
-          }`}
-        >
-          <Building2 className="w-4 h-4" />
-          <span>B2B Bank</span>
-        </button>
-        <button
-          onClick={() => setCurrentView("safety")}
-          className={`flex flex-col items-center space-y-0.5 text-[10px] font-bold ${
-            currentView === "safety" ? "text-blue-700 dark:text-blue-400" : "text-slate-400"
-          }`}
-        >
-          <Scale className="w-4 h-4" />
-          <span>Safety</span>
-        </button>
-      </div>
+      {/* Persistent Official Footer (Requirement 13) */}
+      <footer className="border-t border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur py-5 px-4 sm:px-8 mt-auto text-xs text-slate-500 dark:text-slate-400">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-3 text-center md:text-left">
+          <div className="space-y-0.5">
+            <div>
+              <span className="font-semibold text-slate-700 dark:text-slate-300">Mandatory Notice:</span>{" "}
+              {t.footerDisclaimer || "Not legal advice. We never ask for UPI PIN, OTP or passwords."}
+            </div>
+            <div className="text-[11px] text-slate-400">
+              Timelines and compensation estimates are computed deterministically under Reserve Bank of India notifications (RBI/2019-20/67 & DBR.No.Leg.BC.78/09.07.005/2017-18).
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-4 text-xs font-semibold">
+            <a
+              href="https://cms.rbi.org.in"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 dark:text-blue-400 hover:underline flex items-center space-x-1"
+            >
+              <Scale className="w-3.5 h-3.5" />
+              <span>RBI CMS Portal (cms.rbi.org.in)</span>
+            </a>
+
+            <a
+              href="https://cybercrime.gov.in"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 dark:text-blue-400 hover:underline flex items-center space-x-1"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>cybercrime.gov.in</span>
+            </a>
+
+            <a
+              href="tel:1930"
+              className="text-rose-600 dark:text-rose-400 hover:underline flex items-center space-x-1 font-bold"
+            >
+              <PhoneCall className="w-3.5 h-3.5" />
+              <span>Cyber Helpline 1930</span>
+            </a>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

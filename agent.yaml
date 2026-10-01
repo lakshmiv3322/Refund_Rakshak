@@ -59,8 +59,8 @@ spec:
     - name: stop_branch
       description: "Terminates standard grievance path for safety branch (cybercrime fraud) or out-of-scope disputes."
   examples:
-    - title: "Failed UPI debit grievance resolution"
-      description: "User submits an unresolved UPI failed transaction with debit. Agent verifies evidence, applies RBI TAT (T+1 calendar day), calculates statutory compensation, and proposes a bank complaint draft for approval."
+    - title: "Failed UPI person-to-merchant (P2M) debit grievance resolution"
+      description: "User submits an unresolved UPI failed transaction to a merchant. Agent identifies P2M context, applies RBI TAT (Item 4(b), T+5 calendar days), calculates statutory delay compensation (₹100/day beyond T+5), and prepares a formal complaint draft for explicit user authorization."
       request:
         path: "/api/agent/run"
         method: "POST"
@@ -68,14 +68,14 @@ spec:
           Content-Type: "application/json"
           Authorization: "Bearer <case_token>"
         body:
-          case_id: "RR-DEMO-001"
+          case_id: "RR-249102"
           message: "My UPI payment of Rs 2400 to grocery store failed on 22 Sept, but money was debited from my SBI account. UTR is DEMOUPI123456."
           language: "en"
       response:
         status: 200
         body:
-          case_id: "RR-DEMO-001"
-          message: "I have recorded your grievance for the failed UPI transaction of ₹2,400 on 2026-09-22 with State Bank of India (Ref: ****3456). Under RBI Circular RBI/2019-20/67 (Item 4(a)), reversal TAT is T+1 calendar day. Since 9 days have elapsed, the potential compensation estimate is ₹800 (subject to verification). I have prepared an initial complaint draft to State Bank of India for your review and explicit approval."
+          case_id: "RR-249102"
+          message: "I have recorded your grievance for the failed UPI merchant payment of ₹2,400 on 2026-09-22 with State Bank of India (Ref: ****3456). Under RBI Circular RBI/2019-20/67 Annexure Item 4(b) (Person-to-Merchant), reversal TAT is T+5 calendar days (deadline: 2026-09-27). Since 4 days have elapsed beyond the statutory TAT, the potential compensation estimate is ₹400 (subject to verification). I have prepared an initial complaint draft to State Bank of India for your review and explicit approval."
           language: "en"
           status: "approval_required"
           approval_request:
@@ -86,15 +86,16 @@ spec:
               bank_name: "State Bank of India"
               subject: "Grievance Redressal: UPI Failed & Debited (Ref: ****3456)"
           case_state:
-            case_id: "RR-DEMO-001"
+            case_id: "RR-249102"
             classification: "supported_upi_failed_debited_not_credited"
             branch: "supported_upi_failed_debit"
-            latest_compensation_estimate: 800
-            latest_days_delayed: 8
+            scenario_id: "upi_p2m_merchant_debit_failed"
+            latest_compensation_estimate: 400
+            latest_days_delayed: 4
   safetyNotes:
     - "Does not offer legal advice or guarantee financial recovery."
     - "Requires explicit human authorization prior to sending any outbound communication."
-    - "Automatically redacts UPI PINs, OTPs, CVVs, passwords, and Aadhaar numbers from all storage and telemetry."
+    - "Automatically redacts UPI PINs, OTPs, CVVs, passwords, Aadhaar, and PAN numbers from all storage and telemetry."
     - "Masks transaction reference numbers to last 4 digits in external exports and logs."
     - "Refers unauthorized and fraudulent transactions to the National Cyber Crime Reporting Portal (cybercrime.gov.in / 1930)."
-  maintainer: "RefundRakshak Team (BharatAgentic Hackathon)"
+  maintainer: "RefundRakshak Redressal Engineering Team"

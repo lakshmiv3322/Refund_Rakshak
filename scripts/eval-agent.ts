@@ -223,6 +223,7 @@ const scenarios: Scenario[] = [
     message: "Generate ombudsman draft after waiting 40 days.",
     preSetup: (c) => {
       c.bank_complaint_date = "2026-08-15";
+      c.bank_complaint_reference = "BK-987654";
       c.simulated_now = "2026-10-01T00:00:00Z";
       c.bank_response = null;
     },
@@ -259,6 +260,62 @@ const scenarios: Scenario[] = [
         /cannot be in the future/,
         "Future transaction dates must be rejected"
       );
+    }
+  },
+  {
+    id: 21,
+    category: "ATM Dispute",
+    name: "ATM Cash Not Dispensed T+5 Compensation",
+    message: "Cash not dispensed from ATM on 2026-09-20.",
+    assertFn: (res, caseState) => {
+      const calc = calculateTATDeadlineAndCompensation("2026-09-20", "2026-10-01", "atm_cash_not_dispensed");
+      assert.strictEqual(calc.tat_days, 5, "ATM TAT must be T+5 calendar days under Item 1(a)");
+      assert(calc.days_delayed > 0, "Days delayed must be positive for 11 days elapsed");
+      assert.strictEqual(calc.potential_compensation_estimate, calc.days_delayed * 100, "ATM compensation must be ₹100/day beyond T+5");
+    }
+  },
+  {
+    id: 22,
+    category: "Merchant Refund",
+    name: "Delayed E-Commerce Merchant Refund T+5",
+    message: "Merchant approved refund on 2026-09-20 but not received.",
+    assertFn: (res, caseState) => {
+      const calc = calculateTATDeadlineAndCompensation("2026-09-20", "2026-10-01", "delayed_merchant_refund");
+      assert.strictEqual(calc.tat_days, 5, "Delayed merchant refund TAT must be T+5 calendar days under Item 4(c)");
+      assert.strictEqual(calc.potential_compensation_estimate, calc.days_delayed * 100, "Merchant refund delay compensation must be ₹100/day beyond T+5");
+    }
+  },
+  {
+    id: 23,
+    category: "Wrong Recipient",
+    name: "Wrong Recipient UPI Recovery Path (No Compensation)",
+    message: "Sent UPI payment to wrong mobile number.",
+    assertFn: (res, caseState) => {
+      const calc = calculateTATDeadlineAndCompensation("2026-09-20", "2026-10-01", "upi_wrong_recipient");
+      assert.strictEqual(calc.potential_compensation_estimate, 0, "Wrong recipient transfers must NOT promise statutory compensation");
+      assert(calc.explanation.includes("no statutory delay compensation"), "Must clearly state no statutory delay compensation applies");
+    }
+  },
+  {
+    id: 24,
+    category: "Fraud Safety",
+    name: "Unauthorized Fraud Golden Hour Customer Liability",
+    message: "Fraudulent debit unauthorized.",
+    assertFn: (res, caseState) => {
+      const calc = calculateTATDeadlineAndCompensation("2026-09-28", "2026-10-01", "unauthorized_fraud_golden_hour");
+      assert.strictEqual(calc.potential_compensation_estimate, 0, "Fraud cases must have 0 statutory delay compensation");
+      assert(calc.circular_reference.includes("DBR.No.Leg.BC.78"), "Must reference RBI customer liability circular");
+    }
+  },
+  {
+    id: 25,
+    category: "IMPS / Card Dispute",
+    name: "Card / IMPS Failed Transfer T+1",
+    message: "IMPS transfer failed on 2026-09-25.",
+    assertFn: (res, caseState) => {
+      const calc = calculateTATDeadlineAndCompensation("2026-09-25", "2026-10-01", "imps_transfer_failed");
+      assert.strictEqual(calc.tat_days, 1, "IMPS transfer TAT must be T+1 calendar day under Item 2(a)");
+      assert.strictEqual(calc.potential_compensation_estimate, calc.days_delayed * 100, "IMPS compensation must be ₹100/day beyond T+1");
     }
   }
 ];
@@ -307,7 +364,7 @@ function createBlankCase(simulatedNow = "2026-10-01T00:00:00Z"): CaseState {
 
 async function runEval() {
   console.log("================================================================================");
-  console.log("             REFUNDRAKSHAK EVALUATION & SAFETY SCORECARD (20 SCENARIOS)         ");
+  console.log("             REFUNDRAKSHAK EVALUATION & SAFETY SCORECARD (25 SCENARIOS)         ");
   console.log("================================================================================");
 
   const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;

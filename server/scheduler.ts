@@ -17,10 +17,11 @@ export function checkAndExecuteDueFollowups(nowIso?: string): { executedCount: n
   for (const c of Object.values(db.cases)) {
     let caseChanged = false;
 
-    // 1. Update latest compensation estimate and days delayed on the case
-    if (c.transaction_facts.transaction_date && c.classification === "supported_upi_failed_debited_not_credited") {
+    // 1. Update latest compensation estimate and days delayed on the case using stored scenario_id
+    if (c.transaction_facts.transaction_date && c.classification !== "unauthorized_or_fraud" && c.classification !== "missing_evidence") {
       try {
-        const calc = calculateTATDeadlineAndCompensation(c.transaction_facts.transaction_date, nowString);
+        const scenarioToUse = c.scenario_id || (c.branch === "upi_p2m_merchant_debit_failed" ? "upi_p2m_merchant_debit_failed" : "upi_p2p_debit_not_credited");
+        const calc = calculateTATDeadlineAndCompensation(c.transaction_facts.transaction_date, nowString, scenarioToUse);
         if (c.latest_compensation_estimate !== calc.potential_compensation_estimate || c.latest_days_delayed !== calc.days_delayed) {
           c.latest_compensation_estimate = calc.potential_compensation_estimate;
           c.latest_days_delayed = calc.days_delayed;
@@ -59,7 +60,7 @@ export function checkAndExecuteDueFollowups(nowIso?: string): { executedCount: n
             const existingNodalAction = c.pending_actions.find(a => a.type === "nodal_officer_escalation");
             if (!existingNodalAction) {
               const compText = c.latest_compensation_estimate && c.latest_compensation_estimate > 0
-                ? `Potential compensation estimate, subject to verification: ₹${c.latest_compensation_estimate} (${c.latest_days_delayed} days delayed beyond T+1 at ₹100/day).`
+                ? `Potential compensation estimate, subject to verification: ₹${c.latest_compensation_estimate} (${c.latest_days_delayed} days delayed beyond TAT at ₹100/day).`
                 : "Potential compensation estimate, subject to verification.";
 
               c.pending_actions.push({
@@ -69,8 +70,8 @@ export function checkAndExecuteDueFollowups(nowIso?: string): { executedCount: n
                 requires_approval: true,
                 created_at: nowString,
                 payload: {
-                  subject: `ESCALATION: Unresolved Failed UPI Debit - Ref ${c.transaction_facts.transaction_reference || "N/A"}`,
-                  body: `Respected Principal Nodal Officer,\n\nMy initial bank complaint dated ${c.bank_complaint_date} (Ref: ${c.transaction_facts.transaction_reference || "N/A"}) regarding failed UPI debit of ₹${c.transaction_facts.amount || "N/A"} remains unresolved after ${daysSinceComplaint} days.\n\nNote: The 7-day wait period before nodal escalation is an industry-standard recommended wait period, not an RBI statutory clause. (Statutory Ombudsman escalation eligibility requires a 30-day wait under the RBI Integrated Ombudsman Scheme).\n\n${compText}\n\nKindly process immediate reversal and credit of statutory delayed-period compensation.`
+                  subject: `ESCALATION: Unresolved Grievance - Ref ${c.bank_complaint_reference || c.transaction_facts.transaction_reference || "N/A"}`,
+                  body: `Respected Principal Nodal Officer,\n\nMy initial bank complaint dated ${c.bank_complaint_date} (Bank Ref: ${c.bank_complaint_reference || "N/A"}, Tx Ref: ${c.transaction_facts.transaction_reference || "N/A"}) regarding failed debit of ₹${c.transaction_facts.amount || "N/A"} remains unresolved after ${daysSinceComplaint} days.\n\nNote: The 7-day wait period before nodal escalation is an industry-standard recommended wait period, not an RBI statutory clause. (Statutory Ombudsman escalation eligibility requires a 30-day wait under the RBI Integrated Ombudsman Scheme).\n\n${compText}\n\nKindly process immediate resolution and credit of statutory compensation.`
                 },
                 simulated: false,
                 source_references: c.source_references
@@ -115,46 +116,75 @@ export function checkAndExecuteDueFollowups(nowIso?: string): { executedCount: n
             });
           }
 
-          // 30-day Ombudsman step: statutory eligibility under RBI Integrated Ombudsman Scheme (Phase 3, Item 10)
+          // 30-day Ombudsman step: statutory eligibility under RBI Integrated Ombudsman Scheme
+          // Block Ombudsman draft until bank complaint reference number exists (P1 Requirement 10)
           if (
             complaintDate &&
             daysSinceComplaint >= 30 &&
             (fu.action_type === "prepare_ombudsman_escalation" || fu.condition === "bank_no_response_30_days" || !c.bank_response)
           ) {
             fu.status = "executed";
-            c.escalation_stage = "ombudsman_eligible";
             executedCount++;
 
-            const existingOmbudsmanAction = c.pending_actions.find(a => a.type === "rbi_ombudsman_draft");
-            if (!existingOmbudsmanAction) {
-              const f = c.transaction_facts;
-              c.pending_actions.push({
-                id: "act_omb_" + Math.random().toString(36).substring(2, 9),
-                type: "rbi_ombudsman_draft",
-                status: "pending_approval",
-                requires_approval: true,
-                created_at: nowString,
-                payload: {
-                  portal_url: "https://cms.rbi.org.in",
-                  subject: `RBI Ombudsman Grievance Submission Pack - Ref ${f.transaction_reference || "N/A"}`,
-                  body: `=== RBI COMPLAINT MANAGEMENT SYSTEM (CMS) PACK ===\nRegulated Entity: ${f.bank_or_provider || "Bank"}\nTransaction Date: ${f.transaction_date}\nAmount: ₹${f.amount}\nReference: ${f.transaction_reference || "N/A"}\nInitial Complaint Date: ${c.bank_complaint_date}\nDays Elapsed: ${daysSinceComplaint}\n\nRelief Claimed: Full reversal of ₹${f.amount} plus statutory delay compensation of ₹${c.latest_compensation_estimate || 0} under RBI Circular RBI/2019-20/67.\n\nNOTE: Submission happens on the official Reserve Bank of India CMS portal at https://cms.rbi.org.in. Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30.`
-                },
-                simulated: false,
-                source_references: c.source_references
+            if (!c.bank_complaint_reference) {
+              c.escalation_stage = "ombudsman_requires_bank_reference";
+              const existingPrompt = c.pending_actions.find(a => a.type === "record_bank_complaint_reference");
+              if (!existingPrompt) {
+                c.pending_actions.push({
+                  id: "act_ref_" + Math.random().toString(36).substring(2, 9),
+                  type: "record_bank_complaint_reference",
+                  status: "pending_input",
+                  requires_approval: false,
+                  created_at: nowString,
+                  payload: {
+                    note: "The 30-day statutory waiting period has elapsed. To prepare your official RBI Ombudsman filing on cms.rbi.org.in, your bank's original complaint acknowledgment number is required by RBI."
+                  }
+                });
+              }
+              c.trace.unshift({
+                id: "tr_omb_block_" + Math.random().toString(36).substring(2, 9),
+                timestamp: nowString,
+                event_type: "SCHEDULER",
+                label: "Ombudsman Blocked: Missing Bank Ref",
+                tool_name: "scheduler",
+                branch: c.branch,
+                status: "warning",
+                summary: `30 days elapsed, but Ombudsman filing is blocked pending bank complaint reference number.`,
+                source_ids: []
+              });
+            } else {
+              c.escalation_stage = "ombudsman_eligible";
+              const existingOmbudsmanAction = c.pending_actions.find(a => a.type === "rbi_ombudsman_draft");
+              if (!existingOmbudsmanAction) {
+                const f = c.transaction_facts;
+                c.pending_actions.push({
+                  id: "act_omb_" + Math.random().toString(36).substring(2, 9),
+                  type: "rbi_ombudsman_draft",
+                  status: "pending_approval",
+                  requires_approval: true,
+                  created_at: nowString,
+                  payload: {
+                    portal_url: "https://cms.rbi.org.in",
+                    subject: `RBI Ombudsman Grievance Submission Pack - Bank Ref ${c.bank_complaint_reference}`,
+                    body: `=== RBI COMPLAINT MANAGEMENT SYSTEM (CMS) PACK ===\nRegulated Entity: ${f.bank_or_provider || "Bank"}\nBank Complaint Reference: ${c.bank_complaint_reference}\nTransaction Date: ${f.transaction_date}\nAmount: ₹${f.amount}\nTransaction Reference: ${f.transaction_reference || "N/A"}\nInitial Complaint Date: ${c.bank_complaint_date}\nDays Elapsed: ${daysSinceComplaint}\n\nRelief Claimed: Full reversal of ₹${f.amount} plus statutory delay compensation of ₹${c.latest_compensation_estimate || 0} under RBI Circular RBI/2019-20/67.\n\nNOTE: Submission happens on the official Reserve Bank of India CMS portal at https://cms.rbi.org.in. Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30.`
+                  },
+                  simulated: false,
+                  source_references: c.source_references
+                });
+              }
+
+              c.trace.unshift({
+                id: "tr_omb_" + Math.random().toString(36).substring(2, 9),
+                timestamp: nowString,
+                event_type: "SCHEDULER",
+                label: "RBI Ombudsman Preconditions Met",
+                tool_name: "scheduler",
+                branch: c.branch,
+                status: "success",
+                summary: `30-day statutory waiting period elapsed without resolution and bank reference ${c.bank_complaint_reference} verified. Prepared official RBI Ombudsman complaint package for cms.rbi.org.in.`,
+                source_ids: []
               });
             }
-
-            c.trace.unshift({
-              id: "tr_omb_" + Math.random().toString(36).substring(2, 9),
-              timestamp: nowString,
-              event_type: "SCHEDULER",
-              label: "RBI Ombudsman Preconditions Met",
-              tool_name: "scheduler",
-              branch: c.branch,
-              status: "success",
-              summary: `30-day statutory waiting period elapsed without resolution. Prepared official RBI Ombudsman complaint package for cms.rbi.org.in.`,
-              source_ids: []
-            });
           }
         }
       }
@@ -162,26 +192,30 @@ export function checkAndExecuteDueFollowups(nowIso?: string): { executedCount: n
 
     // Direct check for cases that reached 30 days without an explicit followup record
     if (complaintDate && daysSinceComplaint >= 30 && !c.bank_response && c.escalation_stage !== "ombudsman_eligible") {
-      const existingOmb = c.pending_actions.find(a => a.type === "rbi_ombudsman_draft");
-      if (!existingOmb) {
-        c.escalation_stage = "ombudsman_eligible";
-        const f = c.transaction_facts;
-        c.pending_actions.push({
-          id: "act_omb_" + Math.random().toString(36).substring(2, 9),
-          type: "rbi_ombudsman_draft",
-          status: "pending_approval",
-          requires_approval: true,
-          created_at: nowString,
-          payload: {
-            portal_url: "https://cms.rbi.org.in",
-            subject: `RBI Ombudsman Grievance Submission Pack - Ref ${f.transaction_reference || "N/A"}`,
-            body: `=== RBI COMPLAINT MANAGEMENT SYSTEM (CMS) PACK ===\nRegulated Entity: ${f.bank_or_provider || "Bank"}\nTransaction Date: ${f.transaction_date}\nAmount: ₹${f.amount}\nReference: ${f.transaction_reference || "N/A"}\nInitial Complaint Date: ${c.bank_complaint_date}\nDays Elapsed: ${daysSinceComplaint}\n\nRelief Claimed: Full reversal of ₹${f.amount} plus statutory delay compensation of ₹${c.latest_compensation_estimate || 0} under RBI Circular RBI/2019-20/67.\n\nNOTE: Submission happens on the official Reserve Bank of India CMS portal at https://cms.rbi.org.in. Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30.`
-          },
-          simulated: false,
-          source_references: c.source_references
-        });
-        caseChanged = true;
-        executedCount++;
+      if (!c.bank_complaint_reference) {
+        c.escalation_stage = "ombudsman_requires_bank_reference";
+      } else {
+        const existingOmb = c.pending_actions.find(a => a.type === "rbi_ombudsman_draft");
+        if (!existingOmb) {
+          c.escalation_stage = "ombudsman_eligible";
+          const f = c.transaction_facts;
+          c.pending_actions.push({
+            id: "act_omb_" + Math.random().toString(36).substring(2, 9),
+            type: "rbi_ombudsman_draft",
+            status: "pending_approval",
+            requires_approval: true,
+            created_at: nowString,
+            payload: {
+              portal_url: "https://cms.rbi.org.in",
+              subject: `RBI Ombudsman Grievance Submission Pack - Bank Ref ${c.bank_complaint_reference}`,
+              body: `=== RBI COMPLAINT MANAGEMENT SYSTEM (CMS) PACK ===\nRegulated Entity: ${f.bank_or_provider || "Bank"}\nBank Complaint Reference: ${c.bank_complaint_reference}\nTransaction Date: ${f.transaction_date}\nAmount: ₹${f.amount}\nTransaction Reference: ${f.transaction_reference || "N/A"}\nInitial Complaint Date: ${c.bank_complaint_date}\nDays Elapsed: ${daysSinceComplaint}\n\nRelief Claimed: Full reversal of ₹${f.amount} plus statutory delay compensation of ₹${c.latest_compensation_estimate || 0} under RBI Circular RBI/2019-20/67.\n\nNOTE: Submission happens on the official Reserve Bank of India CMS portal at https://cms.rbi.org.in. Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30.`
+            },
+            simulated: false,
+            source_references: c.source_references
+          });
+          caseChanged = true;
+          executedCount++;
+        }
       }
     }
 

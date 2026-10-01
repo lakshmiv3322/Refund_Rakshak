@@ -18,9 +18,15 @@ import {
   generatePlaintextToken,
   hashToken,
   sanitizeCase,
+  generateOtp,
+  verifyOtp,
+  createSession,
+  getSessionIdentifier,
+  listCasesForUser,
+  deleteUserData,
   type CaseState
 } from "./server/store.ts";
-import { runAgent } from "./server/agent.ts";
+import { runAgent, runModelSelfTest, getModelHealthStatus } from "./server/agent.ts";
 import { generateEvidencePdf } from "./server/pdf.ts";
 import { loadVerifiedRules } from "./server/rules-engine.ts";
 import { sendEmailOrFallback, loadBankContacts } from "./server/email.ts";
@@ -38,7 +44,7 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// 1. CORS allow-list configuration
+// 1. CORS allow-list configuration: Default same-origin only in production (Requirement 2)
 const isProd = process.env.NODE_ENV === "production";
 const corsOriginsRaw = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || "";
 const allowedOrigins = corsOriginsRaw
@@ -49,35 +55,33 @@ const allowedOrigins = corsOriginsRaw
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (such as mobile apps, curl, server-to-server, or same-origin)
+      // Allow requests with no origin (such as same-origin, curl, server-to-server)
       if (!origin) return callback(null, true);
 
-      // Explicitly allowed origins or wildcard
-      if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
-        return callback(null, true);
+      // If allowed origins explicitly set in env
+      if (allowedOrigins.length > 0) {
+        if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
       }
 
-      // Allow AI Studio preview/dev subdomains (*.run.app), google domains, and localhost
+      // Allow AI Studio preview/dev subdomains (*.run.app), google domains, and localhost in non-production
       if (
-        origin.endsWith(".run.app") ||
-        origin.endsWith(".google.com") ||
-        origin.includes("localhost") ||
-        origin.includes("127.0.0.1")
+        !isProd &&
+        (origin.endsWith(".run.app") ||
+          origin.endsWith(".google.com") ||
+          origin.includes("localhost") ||
+          origin.includes("127.0.0.1"))
       ) {
         return callback(null, true);
       }
 
-      // If in production and custom strict origins are specified without matches
-      if (isProd && allowedOrigins.length > 0) {
-        return callback(new Error(`Origin ${origin} not permitted by CORS policy.`));
-      }
-
-      // Default allow for dev/preview
-      return callback(null, true);
+      // Default to same-origin only in production
+      return callback(new Error(`Origin ${origin} not permitted by same-origin CORS policy.`));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-case-token"]
+    allowedHeaders: ["Content-Type", "Authorization", "x-case-token", "x-api-key", "x-dev-mode"]
   })
 );
 
@@ -109,18 +113,26 @@ try {
   process.exit(1);
 }
 
+// Model self-test on startup (Requirement 6)
+runModelSelfTest().catch(err => {
+  console.warn("Model self-test background error:", err.message);
+});
+
 // Start background SLA scheduler (fires on real clock)
 startBackgroundScheduler(60000);
 
-// API Health Check
+// API Health Check reporting model reachability (Requirements 6 & 22)
 app.get("/api/health", (req, res) => {
-  const isDemo = process.env.SEED_DEMO !== "false";
-  const simTime = process.env.ENABLE_SIM_TIME !== "false";
+  const modelStatus = getModelHealthStatus();
+  const simTime = process.env.ENABLE_SIM_TIME === "true";
   res.json({
     status: "ok",
-    agent: "RefundRakshak Production Copilot",
+    agent: "RefundRakshak",
     version: "1.0.0",
-    demo_mode: isDemo,
+    model_reachable: modelStatus.model_reachable,
+    active_model: modelStatus.active_model,
+    configured_model: modelStatus.configured_model,
+    fallback_model: modelStatus.fallback_model,
     sim_time_enabled: simTime,
     timestamp: new Date().toISOString()
   });
@@ -159,7 +171,7 @@ function extractToken(req: express.Request): string | null {
   return null;
 }
 
-// Helper: verify case ownership token
+// Helper: verify case ownership token or session
 function verifyCaseAccess(req: express.Request, caseState: CaseState): { allowed: boolean; reason?: string } {
   if (process.env.DEV_OPEN_ACCESS === "true") {
     return { allowed: true };
@@ -170,17 +182,103 @@ function verifyCaseAccess(req: express.Request, caseState: CaseState): { allowed
     return { allowed: false, reason: "UNAUTHORIZED" };
   }
 
-  if (!caseState.token_hash) {
-    return { allowed: false, reason: "FORBIDDEN" };
+  // 1. Primary auth: Check user session token from magic link / OTP
+  const sessionUser = getSessionIdentifier(token);
+  if (sessionUser) {
+    const profileEmail = (caseState.user_profile?.email || "").trim().toLowerCase();
+    const caseEmail = (caseState.user_email || "").trim().toLowerCase();
+    const casePhone = (caseState.user_phone || "").trim().toLowerCase();
+    if (sessionUser === profileEmail || sessionUser === caseEmail || sessionUser === casePhone) {
+      return { allowed: true };
+    }
   }
 
-  const hashed = hashToken(token);
-  if (hashed !== caseState.token_hash) {
-    return { allowed: false, reason: "FORBIDDEN" };
+  // 2. Secondary auth: Case-specific bearer token hash
+  if (caseState.token_hash) {
+    const hashed = hashToken(token);
+    if (hashed === caseState.token_hash) {
+      return { allowed: true };
+    }
   }
 
-  return { allowed: true };
+  return { allowed: false, reason: "FORBIDDEN" };
 }
+
+// Identity & OTP Endpoints (Requirement 8: email magic link or phone OTP)
+app.post("/api/auth/request-otp", (req, res) => {
+  const { identifier } = req.body || {};
+  if (!identifier || typeof identifier !== "string" || identifier.trim().length < 3) {
+    return res.status(400).json({ error: { code: "INVALID_IDENTIFIER", message: "Valid email or 10-digit phone number is required." } });
+  }
+
+  const clean = identifier.trim();
+  const code = generateOtp(clean);
+
+  // If email identifier, attempt email delivery via SMTP/Resend
+  if (clean.includes("@")) {
+    sendEmailOrFallback({
+      to: clean,
+      subject: "Your RefundRakshak Verification Code",
+      body: `Namaste,\n\nYour RefundRakshak verification code is: ${code}\n\nThis code expires in 10 minutes. Do not share your code or payment credentials with anyone.`
+    }).catch(e => console.warn("Could not email verification code:", e.message));
+  }
+
+  res.json({
+    status: "success",
+    message: "Verification code generated and sent.",
+    channel: clean.includes("@") ? "email" : "phone_otp",
+    // In dev mode, return the code to assist automated testing
+    dev_code: process.env.NODE_ENV !== "production" ? code : undefined
+  });
+});
+
+app.post("/api/auth/verify-otp", (req, res) => {
+  const { identifier, code } = req.body || {};
+  if (!identifier || !code) {
+    return res.status(400).json({ error: { code: "MISSING_FIELDS", message: "Identifier and OTP code are required." } });
+  }
+
+  const valid = verifyOtp(String(identifier), String(code));
+  if (!valid) {
+    return res.status(401).json({ error: { code: "INVALID_OTP", message: "Invalid or expired verification code." } });
+  }
+
+  const sessionToken = createSession(String(identifier));
+  const userCases = listCasesForUser(String(identifier)).map(sanitizeCase);
+
+  res.json({
+    status: "success",
+    session_token: sessionToken,
+    user: identifier.trim(),
+    cases: userCases
+  });
+});
+
+// User cases list via session token
+app.get("/api/user/cases", (req, res) => {
+  const token = extractToken(req);
+  if (!token) return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Session token required." } });
+  const user = getSessionIdentifier(token);
+  if (!user) return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Invalid or expired session token." } });
+
+  const cases = listCasesForUser(user).map(sanitizeCase);
+  res.json(cases);
+});
+
+// Delete user data under DPDP principles (Requirement 8)
+app.delete("/api/user/data", (req, res) => {
+  const token = extractToken(req);
+  if (!token) return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Session token required." } });
+  const user = getSessionIdentifier(token);
+  if (!user) return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Invalid or expired session token." } });
+
+  const result = deleteUserData(user);
+  res.json({
+    status: "success",
+    message: `All personal grievance records purged (${result.deletedCasesCount} cases deleted).`,
+    deleted_count: result.deletedCasesCount
+  });
+});
 
 // Create new grievance case: returns plaintext token only ONCE
 app.post("/api/cases", (req, res) => {
@@ -188,23 +286,32 @@ app.post("/api/cases", (req, res) => {
   const plaintextToken = generatePlaintextToken();
   const tokenHash = hashToken(plaintextToken);
 
+  const authUser = extractToken(req) ? getSessionIdentifier(extractToken(req)!) : null;
+  const userEmail = authUser && authUser.includes("@") ? authUser : (req.body.user_profile?.email || req.body.email || "user@example.com");
+  const userPhone = authUser && !authUser.includes("@") ? authUser : (req.body.user_phone || req.body.phone || null);
+
   const newCase: CaseState = {
     case_id: caseId,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     user_language: req.body.language || "en",
-    user_profile: req.body.user_profile || { name: "User", email: "user@example.com" },
+    user_profile: { name: req.body.user_profile?.name || "User", email: userEmail },
+    user_email: userEmail,
+    user_phone: userPhone,
     token_hash: tokenHash,
+    scenario_id: req.body.scenario_id || undefined,
+    consent_given: Boolean(req.body.consent_given),
+    consent_timestamp: req.body.consent_given ? new Date().toISOString() : null,
     transaction_facts: {
-      amount: null,
+      amount: req.body.amount ? Number(req.body.amount) : null,
       currency: "INR",
-      transaction_date: null,
-      transaction_reference: null,
-      bank_or_provider: null,
+      transaction_date: req.body.transaction_date || null,
+      transaction_reference: req.body.transaction_reference || null,
+      bank_or_provider: req.body.bank_or_provider || null,
       transaction_type: "UPI",
       transaction_status: null,
       beneficiary_status: null,
-      merchant_name: null,
+      merchant_name: req.body.merchant_name || null,
       user_claimed_authorized: true,
       confidence: 0,
       missing_fields: ["amount", "transaction_date", "transaction_reference", "bank_or_provider"]
@@ -237,7 +344,7 @@ app.post("/api/cases", (req, res) => {
   });
 });
 
-// List cases: does NOT return other users' cases or token hashes
+// List cases: returns user's cases for session or case token
 app.get("/api/cases", (req, res) => {
   if (process.env.DEV_OPEN_ACCESS === "true") {
     const all = listAllCases().map(sanitizeCase);
@@ -251,6 +358,14 @@ app.get("/api/cases", (req, res) => {
     });
   }
 
+  // Session user cases
+  const sessionUser = getSessionIdentifier(token);
+  if (sessionUser) {
+    const userCases = listCasesForUser(sessionUser).map(sanitizeCase);
+    return res.json(userCases);
+  }
+
+  // Token hash match
   const tokenHash = hashToken(token);
   const userCases = listCasesForToken(tokenHash).map(sanitizeCase);
   res.json(userCases);
@@ -275,22 +390,72 @@ app.get("/api/cases/:case_id", (req, res) => {
   res.json(sanitizeCase(c));
 });
 
-// Demo seed reset endpoint (enabled by default in demo/judge builds unless SEED_DEMO=false)
-app.post("/api/cases/RR-DEMO-001/reset", (req, res) => {
-  if (process.env.SEED_DEMO === "false" && process.env.DEV_OPEN_ACCESS !== "true") {
-    return res.status(403).json({
-      error: { code: "FORBIDDEN", message: "Demo reset is disabled when SEED_DEMO=false." }
-    });
+// Capture Bank Complaint Reference Number (Requirement 10)
+app.patch("/api/cases/:case_id/bank-reference", (req, res) => {
+  const caseId = req.params.case_id;
+  const c = getCaseById(caseId);
+  if (!c) return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: `Case ${caseId} not found.` } });
+
+  const access = verifyCaseAccess(req, c);
+  if (!access.allowed) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access denied." } });
+
+  const { bank_complaint_reference } = req.body || {};
+  if (!bank_complaint_reference || typeof bank_complaint_reference !== "string" || !bank_complaint_reference.trim()) {
+    return res.status(400).json({ error: { code: "INVALID_REFERENCE", message: "Bank complaint reference is required." } });
   }
 
-  const demo = createDemoCaseState();
-  saveCaseState(demo);
-  res.json({
-    status: "success",
-    message: "Demo seed case RR-DEMO-001 reset.",
-    case_state: sanitizeCase(demo),
-    token: "demo-token-rr-001"
+  c.bank_complaint_reference = bank_complaint_reference.trim();
+  c.updated_at = new Date().toISOString();
+  c.timeline.push({
+    timestamp: new Date().toISOString(),
+    event: `Bank complaint reference recorded: ${c.bank_complaint_reference}`
   });
+
+  // Clear any prompt asking for reference
+  c.pending_actions = c.pending_actions.filter(a => a.type !== "record_bank_complaint_reference");
+
+  saveCaseState(c);
+  res.json({ status: "success", bank_complaint_reference: c.bank_complaint_reference, case_state: sanitizeCase(c) });
+});
+
+// Mark case as resolved (Requirement 9)
+app.post("/api/cases/:case_id/resolve", (req, res) => {
+  const caseId = req.params.case_id;
+  const c = getCaseById(caseId);
+  if (!c) return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: `Case ${caseId} not found.` } });
+
+  const access = verifyCaseAccess(req, c);
+  if (!access.allowed) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access denied." } });
+
+  const { amount_recovered, outcome } = req.body || {};
+  const recovered = amount_recovered !== undefined ? Number(amount_recovered) : (c.transaction_facts.amount || 0);
+
+  c.complaint_status = "resolved";
+  c.resolved_at = new Date().toISOString();
+  c.amount_recovered = recovered;
+  c.resolution_outcome = outcome || "Refund credited to customer account.";
+  c.updated_at = new Date().toISOString();
+  c.timeline.push({
+    timestamp: new Date().toISOString(),
+    event: `Case resolved: ₹${recovered} recovered. Outcome: ${c.resolution_outcome}`
+  });
+
+  saveCaseState(c);
+  res.json({ status: "success", case_state: sanitizeCase(c) });
+});
+
+// Export Case JSON (Requirement 8)
+app.get("/api/cases/:case_id/export", (req, res) => {
+  const caseId = req.params.case_id;
+  const c = getCaseById(caseId);
+  if (!c) return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: `Case ${caseId} not found.` } });
+
+  const access = verifyCaseAccess(req, c);
+  if (!access.allowed) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access denied." } });
+
+  res.setHeader("Content-Disposition", `attachment; filename=case_${caseId}_export.json`);
+  res.setHeader("Content-Type", "application/json");
+  res.json(sanitizeCase(c));
 });
 
 // Run agent endpoint (Supports standard JSON and live SSE streaming, with rate limiting and image validation)
@@ -439,14 +604,15 @@ app.post("/api/agent/run", agentRunLimiter, async (req, res) => {
   }
 });
 
-// Advance clock (dev / evaluation tool, enabled by default unless ENABLE_SIM_TIME=false)
+// Advance clock (dev / evaluation tool only, strictly gated behind ?dev=1 AND ENABLE_SIM_TIME=true)
 app.post("/api/cases/:case_id/simulate-time", async (req, res) => {
   try {
-    if (process.env.ENABLE_SIM_TIME === "false") {
+    const isDev = req.query.dev === "1" || req.body?.dev === "1" || req.headers["x-dev-mode"] === "1";
+    if (process.env.ENABLE_SIM_TIME !== "true" || !isDev) {
       return res.status(403).json({
         error: {
           code: "SIMULATION_DISABLED",
-          message: "Simulation time advance is disabled in this environment (ENABLE_SIM_TIME=false)."
+          message: "Simulation time advance is disabled in production. It is only permitted when ENABLE_SIM_TIME=true and dev parameter (?dev=1) is present."
         }
       });
     }
@@ -719,6 +885,28 @@ app.get("/api/cases/:case_id/evidence-pack", (req, res) => {
   generateEvidencePdf(c, res);
 });
 
+// B2B Auth Middleware (Requirement 4: API key via env B2B_API_KEY, 401 otherwise)
+app.use("/api/b2b", (req, res, next) => {
+  const configuredKey = process.env.B2B_API_KEY;
+  if (!configuredKey) {
+    return res.status(401).json({
+      error: { code: "UNAUTHORIZED", message: "B2B API is disabled: B2B_API_KEY is not configured on the server." }
+    });
+  }
+
+  const authHeader = req.headers.authorization;
+  const bearerKey = authHeader && authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : null;
+  const customKey = (req.headers["x-api-key"] || req.headers["x-b2b-key"] || "") as string;
+  const presentedKey = bearerKey || (typeof customKey === "string" ? customKey.trim() : null);
+
+  if (!presentedKey || presentedKey !== configuredKey.trim()) {
+    return res.status(401).json({
+      error: { code: "UNAUTHORIZED", message: "Invalid or missing B2B API key." }
+    });
+  }
+  next();
+});
+
 // B2B Batch Triage
 app.post("/api/b2b/triage-batch", (req, res) => {
   try {
@@ -843,9 +1031,9 @@ if (process.env.NODE_ENV !== "production") {
   });
   app.use(vite.middlewares);
 } else {
-  app.use(express.static(path.join(__dirname, "dist")));
+  app.use(express.static(path.join(process.cwd(), "dist")));
   app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "dist/index.html"));
+    res.sendFile(path.join(process.cwd(), "dist", "index.html"));
   });
 }
 

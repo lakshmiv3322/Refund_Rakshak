@@ -10,8 +10,17 @@ export interface CaseState {
   updated_at: string;
   user_language: string;
   user_profile: { name: string; email: string };
+  user_phone?: string | null;
+  user_email?: string | null;
   auth_token?: string;
   token_hash?: string;
+  scenario_id?: string;
+  bank_complaint_reference?: string | null;
+  consent_given?: boolean;
+  consent_timestamp?: string | null;
+  resolved_at?: string | null;
+  amount_recovered?: number | null;
+  resolution_outcome?: string | null;
   transaction_facts: {
     amount: number | null;
     currency: string;
@@ -180,28 +189,86 @@ export function getDatabase(): Database.Database {
     }
   }
 
-  // Seed demo case by default in judge/demo mode (unless SEED_DEMO=false)
-  if (process.env.SEED_DEMO !== "false") {
-    const existing = db.prepare("SELECT case_id FROM cases WHERE case_id = ?").get("RR-DEMO-001");
-    if (!existing) {
-      const demo = createDemoCaseState();
-      db.prepare(`
-        INSERT OR REPLACE INTO cases (case_id, token_hash, created_at, updated_at, classification, branch, data)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        demo.case_id,
-        demo.token_hash || null,
-        demo.created_at,
-        demo.updated_at,
-        demo.classification,
-        demo.branch,
-        JSON.stringify(demo)
-      );
-    }
-  }
-
   dbInstance = db;
   return db;
+}
+
+// In-memory OTP & Session Cache (persists for lifetime of process, fallback-friendly)
+interface OtpEntry {
+  code: string;
+  expiresAt: number;
+}
+
+const otpStore = new Map<string, OtpEntry>();
+const sessionStore = new Map<string, { identifier: string; createdAt: number; expiresAt: number }>();
+
+export function generateOtp(identifier: string): string {
+  const clean = identifier.trim().toLowerCase();
+  // 6-digit random code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  // 10 minutes expiry
+  otpStore.set(clean, { code, expiresAt: Date.now() + 10 * 60 * 1000 });
+  console.log(`[RefundRakshak Auth] Generated OTP for ${clean}: ${code}`);
+  return code;
+}
+
+export function verifyOtp(identifier: string, code: string): boolean {
+  const clean = identifier.trim().toLowerCase();
+  const entry = otpStore.get(clean);
+  if (!entry) return false;
+  if (Date.now() > entry.expiresAt) {
+    otpStore.delete(clean);
+    return false;
+  }
+  if (entry.code === code.trim()) {
+    otpStore.delete(clean);
+    return true;
+  }
+  return false;
+}
+
+export function createSession(identifier: string): string {
+  const clean = identifier.trim().toLowerCase();
+  const sessionToken = crypto.randomBytes(32).toString("hex");
+  sessionStore.set(sessionToken, {
+    identifier: clean,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 days
+  });
+  return sessionToken;
+}
+
+export function getSessionIdentifier(sessionToken: string): string | null {
+  const session = sessionStore.get(sessionToken);
+  if (!session) return null;
+  if (Date.now() > session.expiresAt) {
+    sessionStore.delete(sessionToken);
+    return null;
+  }
+  return session.identifier;
+}
+
+export function listCasesForUser(identifier: string): CaseState[] {
+  const clean = identifier.trim().toLowerCase();
+  const allCases = listAllCases();
+  return allCases.filter(c => {
+    const profileEmail = (c.user_profile?.email || "").trim().toLowerCase();
+    const caseEmail = (c.user_email || "").trim().toLowerCase();
+    const casePhone = (c.user_phone || "").trim().toLowerCase();
+    return profileEmail === clean || caseEmail === clean || casePhone === clean;
+  });
+}
+
+export function deleteUserData(identifier: string): { deletedCasesCount: number } {
+  const clean = identifier.trim().toLowerCase();
+  const db = getDatabase();
+  const userCases = listCasesForUser(clean);
+  let count = 0;
+  for (const c of userCases) {
+    db.prepare("DELETE FROM cases WHERE case_id = ?").run(c.case_id);
+    count++;
+  }
+  return { deletedCasesCount: count };
 }
 
 export function closeDatabase(): void {
@@ -367,6 +434,8 @@ export function createDemoCaseState(): CaseState {
     simulated_now: "2026-09-25T09:00:00Z",
     complaint_status: "bank_complaint_submitted_no_response",
     bank_complaint_date: "2026-09-23",
+    bank_complaint_reference: "BK-98765",
+    scenario_id: "upi_p2p_debit_not_credited",
     bank_response: null,
     pending_actions: [],
     outbox: [

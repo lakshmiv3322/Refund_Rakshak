@@ -152,7 +152,27 @@ export function calculateTATDeadlineAndCompensation(
   const tatDays = scenario.tat_days;
   const deadlineStr = addCalendarDays(txDateStr, tatDays);
   const daysDelayed = Math.max(0, diffDays - tatDays);
-  const potentialCompensation = daysDelayed * scenario.compensation_per_day;
+  const potentialCompensation = scenario.compensation_per_day > 0
+    ? daysDelayed * scenario.compensation_per_day
+    : 0;
+
+  let explanation = "";
+  if (scenario.scenario_id === "unauthorized_fraud_golden_hour") {
+    explanation = `Unauthorized transaction reported on ${txDateStr}. Under ${scenario.circular_reference}, customer notification to the bank within 3 working days establishes ZERO customer liability. Daily delay compensation does not apply to unauthorized fraud disputes.`;
+  } else if (scenario.scenario_id === "upi_wrong_recipient") {
+    explanation = `Wrong-recipient UPI transfer on ${txDateStr}. Under ${scenario.circular_reference}, recovery is processed via remitter bank chargeback/recall request to the beneficiary bank. Daily delay compensation does not apply to user input errors.`;
+  } else {
+    explanation = `Transaction date ${txDateStr} (T). Under ${scenario.circular_reference}, reversal TAT is T+${tatDays} ${scenario.day_basis} day(s) (${deadlineStr}). As of ${nowStr}, transaction has been delayed by ${daysDelayed} day(s) beyond T+${tatDays} at statutory rate of ₹${scenario.compensation_per_day}/day.`;
+  }
+
+  const goldenHourChecklist = scenario.scenario_id === "unauthorized_fraud_golden_hour"
+    ? [
+        "1. Call 1930 (National Cyber Crime Reporting Helpline) immediately to initiate emergency freeze.",
+        "2. File a formal cybercrime complaint at https://cybercrime.gov.in within 24 hours.",
+        "3. Block your card, UPI VPA, and net-banking access immediately through your bank mobile app or helpline.",
+        "4. Submit a written dispute report to your bank within 3 working days for ZERO customer liability under RBI Circular DBR.No.Leg.BC.78/09.07.005/2017-18."
+      ]
+    : undefined;
 
   return {
     transaction_date: txDateStr,
@@ -162,7 +182,7 @@ export function calculateTATDeadlineAndCompensation(
     days_delayed: daysDelayed,
     potential_compensation_estimate: potentialCompensation,
     caveat: "Potential compensation estimate, subject to verification.",
-    explanation: `Transaction date ${txDateStr} (T). Under ${scenario.circular_reference}, reversal TAT is T+${tatDays} ${scenario.day_basis} day(s) (${deadlineStr}). As of ${nowStr}, transaction has been delayed by ${daysDelayed} day(s) beyond T+${tatDays} at statutory rate of ₹${scenario.compensation_per_day}/day.`,
+    explanation,
     scenario_id: scenario.scenario_id,
     circular_row: scenario.circular_row,
     circular_reference: scenario.circular_reference,
@@ -170,7 +190,8 @@ export function calculateTATDeadlineAndCompensation(
     day_basis: scenario.day_basis,
     compensation_per_day: scenario.compensation_per_day,
     official_url: scenario.official_url,
-    status_label: scenario.status_label
+    status_label: scenario.status_label,
+    golden_hour_checklist: goldenHourChecklist
   };
 }
 

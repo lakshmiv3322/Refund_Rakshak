@@ -70,12 +70,20 @@ export function redactSecrets(text: string): { redactedText: string; foundSecret
     redacted = redacted.replace(cardRegex, "[REDACTED_CARD_NUMBER]");
   }
 
-  // 6. 12-digit Aadhaar numbers: matches 4 digits, space, 4 digits, space, 4 digits
-  const aadhaarRegex = /\b\d{4}\s\d{4}\s\d{4}\b/g;
+  // 6. 12-digit Aadhaar numbers: matches 4 digits, optional space/dash, 4 digits, optional space/dash, 4 digits
+  const aadhaarRegex = /\b\d{4}[-\s]?\d{4}[-\s]?\d{4}\b/g;
   if (aadhaarRegex.test(redacted)) {
     secretTypes.push("AADHAAR");
     aadhaarRegex.lastIndex = 0;
     redacted = redacted.replace(aadhaarRegex, "[REDACTED_AADHAAR]");
+  }
+
+  // 7. Indian PAN: 5 uppercase letters, 4 digits, 1 uppercase letter
+  const panRegex = /\b[A-Za-z]{5}[0-9]{4}[A-Za-z]\b/g;
+  if (panRegex.test(redacted)) {
+    secretTypes.push("PAN");
+    panRegex.lastIndex = 0;
+    redacted = redacted.replace(panRegex, "[REDACTED_PAN]");
   }
 
   return {
@@ -102,7 +110,9 @@ export const updateCaseFactsSchema = z.object({
   beneficiary_status: z.string().optional().nullable(),
   merchant_name: z.string().optional().nullable(),
   bank_complaint_date: z.string().optional().nullable(),
-  bank_response: z.string().optional().nullable()
+  bank_complaint_reference: z.string().optional().nullable(),
+  bank_response: z.string().optional().nullable(),
+  scenario_id: z.string().optional().nullable()
 });
 
 export const recordClassificationSchema = z.object({
@@ -370,7 +380,9 @@ export function executeToolCall(
       if (args.beneficiary_status) caseState.transaction_facts.beneficiary_status = args.beneficiary_status;
       if (args.merchant_name) caseState.transaction_facts.merchant_name = args.merchant_name;
       if (args.bank_complaint_date) caseState.bank_complaint_date = args.bank_complaint_date;
+      if (args.bank_complaint_reference) caseState.bank_complaint_reference = args.bank_complaint_reference;
       if (args.bank_response) caseState.bank_response = args.bank_response;
+      if (args.scenario_id) caseState.scenario_id = args.scenario_id;
 
       const f = caseState.transaction_facts;
       const missing: string[] = [];
@@ -469,6 +481,16 @@ Only report high confidence (>=0.7) for fields that are clearly visible. If blur
           const confidenceThreshold = 0.7;
           const mergedFields: string[] = [];
 
+          const priorAmount = caseState.transaction_facts.amount;
+          const priorRef = caseState.transaction_facts.transaction_reference;
+          let mismatchQuestion: string | null = null;
+
+          if (priorAmount && extracted.amount && Math.abs(priorAmount - extracted.amount) > 0.01) {
+            mismatchQuestion = `Discrepancy detected: Your message indicated ₹${priorAmount}, but your receipt screenshot shows ₹${extracted.amount}. Could you please confirm which amount is correct?`;
+          } else if (priorRef && extracted.transaction_reference && priorRef.trim() !== extracted.transaction_reference.trim()) {
+            mismatchQuestion = `Discrepancy detected: You mentioned reference ${maskReference(priorRef)}, but the screenshot displays ${maskReference(extracted.transaction_reference)}. Could you please confirm the correct UTR?`;
+          }
+
           // Merge confident facts into caseState
           if (extracted.amount && extracted.amount_confidence >= confidenceThreshold && extracted.amount > 0) {
             caseState.transaction_facts.amount = extracted.amount;
@@ -531,7 +553,7 @@ Only report high confidence (>=0.7) for fields that are clearly visible. If blur
           caseState.transaction_facts.missing_fields = missing;
 
           // Formulate confirmation prompt for the user
-          const confirmationQuestion = `I extracted the following details from your payment screenshot:\n• Amount: ₹${f.amount ?? "Unclear"}\n• Transaction Date: ${f.transaction_date ?? "Unclear"}\n• Reference / UTR: ${maskReference(f.transaction_reference)}\n• Bank / Provider: ${f.bank_or_provider ?? "Unclear"}\n• Status: ${f.transaction_status ?? "Debit Recorded"}\n\nPlease confirm if these details are accurate, or let me know if anything needs correction.`;
+          const confirmationQuestion = mismatchQuestion || `I extracted the following details from your payment screenshot:\n• Amount: ₹${f.amount ?? "Unclear"}\n• Transaction Date: ${f.transaction_date ?? "Unclear"}\n• Reference / UTR: ${maskReference(f.transaction_reference)}\n• Bank / Provider: ${f.bank_or_provider ?? "Unclear"}\n• Status: ${f.transaction_status ?? "Debit Recorded"}\n\nPlease confirm if these details are accurate, or let me know if anything needs correction.`;
 
           addToolTrace(
             "Extracted evidence from screenshot",
@@ -544,6 +566,7 @@ Only report high confidence (>=0.7) for fields that are clearly visible. If blur
               extracted,
               merged_fields: mergedFields,
               missing_fields: missing,
+              mismatch_detected: Boolean(mismatchQuestion),
               confirmation_prompt: confirmationQuestion
             },
             stop: true,
@@ -918,6 +941,14 @@ Determine:
         });
       }
 
+      if (!caseState.bank_complaint_reference) {
+        return wrapResult({
+          result: {
+            error: `Preconditions not met: Under the RBI Integrated Ombudsman Scheme, your bank's original complaint acknowledgment / reference number is required to file on cms.rbi.org.in.`
+          }
+        });
+      }
+
       const f = caseState.transaction_facts;
       const act = {
         id: "act_omb_" + Math.random().toString(36).substring(2, 9),
@@ -927,8 +958,8 @@ Determine:
         created_at: new Date().toISOString(),
         payload: {
           portal_url: "https://cms.rbi.org.in",
-          subject: `RBI Ombudsman Grievance Submission Pack - Ref ${maskReference(f.transaction_reference)}`,
-          body: `=== RBI COMPLAINT MANAGEMENT SYSTEM (CMS) PACK ===\nRegulated Entity: ${f.bank_or_provider || "Bank"}\nTransaction Date: ${f.transaction_date}\nAmount: ₹${f.amount}\nReference: ${maskReference(f.transaction_reference)}\nInitial Complaint Date: ${caseState.bank_complaint_date}\nDays Elapsed: ${days}\n\nRelief Claimed: Full reversal of ₹${f.amount} plus statutory delay compensation under RBI Circular RBI/2019-20/67.\n\nNOTE: Submission happens on the official Reserve Bank of India CMS portal at https://cms.rbi.org.in. Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30.`
+          subject: `RBI Ombudsman Grievance Submission Pack - Bank Ref ${caseState.bank_complaint_reference} (Tx Ref: ${maskReference(f.transaction_reference)})`,
+          body: `=== RBI COMPLAINT MANAGEMENT SYSTEM (CMS) PACK ===\nRegulated Entity: ${f.bank_or_provider || "Bank"}\nBank Complaint Reference: ${caseState.bank_complaint_reference}\nTransaction Date: ${f.transaction_date}\nAmount: ₹${f.amount}\nReference: ${maskReference(f.transaction_reference)}\nInitial Complaint Date: ${caseState.bank_complaint_date}\nDays Elapsed: ${days}\n\nRelief Claimed: Full reversal of ₹${f.amount} plus statutory delay compensation under RBI Circular RBI/2019-20/67.\n\nNOTE: Submission happens on the official Reserve Bank of India CMS portal at https://cms.rbi.org.in. Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30.`
         },
         simulated: false,
         source_references: [rulesData.rules[1]]

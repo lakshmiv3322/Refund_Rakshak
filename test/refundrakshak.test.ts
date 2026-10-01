@@ -403,3 +403,41 @@ describe("Bank Contact Directory & Recipient Verification (Phase 2, Requirements
     expect(knownEmails.has("random_attacker@evil.com")).toBe(false);
   });
 });
+
+describe("Expanded Incident Scenarios & Safety Rules", () => {
+  it("calculates ATM non-dispensation TAT (T+5, Item 1(a))", () => {
+    const calc = calculateTATDeadlineAndCompensation("2026-09-20", "2026-10-01", "atm_cash_not_dispensed");
+    expect(calc.tat_days).toBe(5);
+    expect(calc.days_delayed).toBe(6);
+    expect(calc.potential_compensation_estimate).toBe(600);
+    expect(calc.circular_row).toContain("Item 1(a)");
+  });
+
+  it("calculates delayed merchant refund TAT (T+5, Item 4(c))", () => {
+    const calc = calculateTATDeadlineAndCompensation("2026-09-20", "2026-10-01", "delayed_merchant_refund");
+    expect(calc.tat_days).toBe(5);
+    expect(calc.days_delayed).toBe(6);
+    expect(calc.potential_compensation_estimate).toBe(600);
+    expect(calc.circular_row).toContain("4(c)");
+  });
+
+  it("handles wrong recipient UPI with 0 delay compensation and recall advice", () => {
+    const calc = calculateTATDeadlineAndCompensation("2026-09-20", "2026-10-01", "upi_wrong_recipient");
+    expect(calc.potential_compensation_estimate).toBe(0);
+    expect(calc.explanation).toContain("Daily delay compensation does not apply");
+  });
+
+  it("handles unauthorized cyber fraud with 0 delay compensation and customer liability circular", () => {
+    const calc = calculateTATDeadlineAndCompensation("2026-09-28", "2026-10-01", "unauthorized_fraud_golden_hour");
+    expect(calc.potential_compensation_estimate).toBe(0);
+    expect(calc.circular_reference).toContain("DBR.No.Leg.BC.78");
+  });
+
+  it("redacts Indian PAN card numbers", () => {
+    const res = redactSecrets("My PAN number is ABCDE1234F for verification");
+    expect(res.foundSecrets).toBe(true);
+    expect(res.redactedText).toContain("[REDACTED_PAN]");
+    expect(res.redactedText).not.toContain("ABCDE1234F");
+  });
+});
+

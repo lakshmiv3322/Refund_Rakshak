@@ -14,9 +14,9 @@ services:
       - RULES_PATH=/app/data/verified_rules.json
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.8-flash}
-      - GEMINI_FALLBACK_MODEL=${GEMINI_FALLBACK_MODEL:-gemini-3.1-flash-lite}
-      - ENABLE_SIM_TIME=${ENABLE_SIM_TIME:-true}
-      - SEED_DEMO=${SEED_DEMO:-true}
+      - GEMINI_FALLBACK_MODEL=${GEMINI_FALLBACK_MODEL:-gemini-3.8-flash}
+      - ENABLE_SIM_TIME=${ENABLE_SIM_TIME:-false}
+      - B2B_API_KEY=${B2B_API_KEY:-}
       - DEV_OPEN_ACCESS=${DEV_OPEN_ACCESS:-false}
     volumes:
       - refundrakshak_data:/app/data
