@@ -1,5 +1,5 @@
 # aiKart Agent Manifest Template for RefundRakshak
-# Confirm exact field names and submission requirements against the official aiKart Agent Manifest Guide before submission.
+# Replace field names with those in the official aiKart Agent Manifest Guide.
 
 apiVersion: aikart.ai/v1alpha1
 kind: Agent
@@ -9,8 +9,8 @@ metadata:
   category: "Fintech Grievance & Legal-Tech Agent"
   description: "Multilingual AI agent that reads transaction evidence, classifies grievances, applies verified RBI rules, and automates escalation paths."
 spec:
-  endpoint: "https://ais-dev-dnfsfjhq6z6qbrv3xejndb-848289306342.asia-east1.run.app/api/agent/run"
-  healthEndpoint: "https://ais-dev-dnfsfjhq6z6qbrv3xejndb-848289306342.asia-east1.run.app/api/health"
+  endpoint: "<DEPLOYED_ENDPOINT>/api/agent/run"
+  healthEndpoint: "<DEPLOYED_HEALTH>/api/health"
   supportedInput:
     - "text/plain"
     - "application/json"

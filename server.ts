@@ -11,7 +11,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 
 // Initialize Gemini SDK
 const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
@@ -28,7 +29,9 @@ try {
   console.error("Failed to load verified rules:", e);
 }
 
-// In-Memory Database for Cases
+// JSON Persistence Store at ./data/db.json
+const dbFilePath = path.join(__dirname, "data/db.json");
+
 interface CaseState {
   case_id: string;
   created_at: string;
@@ -69,92 +72,126 @@ interface CaseState {
   safety_flags: string[];
 }
 
-const casesDb = new Map<string, CaseState>();
+interface DBStructure {
+  cases: Record<string, CaseState>;
+  latestBatchSummary: any;
+  batchResults: any[];
+}
 
-// Initialize Demo Case RR-DEMO-001
-const demoCaseId = "RR-DEMO-001";
-const demoCaseState: CaseState = {
-  case_id: demoCaseId,
-  created_at: "2026-09-23T10:00:00Z",
-  updated_at: "2026-10-01T04:20:00Z",
-  user_language: "en",
-  user_profile: { name: "Demo User", email: "demo.user@example.com" },
-  transaction_facts: {
-    amount: 2400,
-    currency: "INR",
-    transaction_date: "2026-09-22",
-    transaction_reference: "DEMOUPI123456",
-    bank_or_provider: "Demo Bank",
-    transaction_type: "UPI",
-    transaction_status: "FAILED_DEBITED",
-    beneficiary_status: "NOT_CREDITED",
-    merchant_name: "QuickPay Merchant",
-    user_claimed_authorized: true,
-    confidence: 0.98,
-    missing_fields: []
-  },
-  classification: "supported_upi_failed_debited_not_credited",
-  classification_confidence: 0.99,
-  classification_rationale: "Payer account debited, beneficiary not credited, UPI payment system, verified within RBI TAT scope.",
-  branch: "supported_upi_failed_debit",
-  evidence_items: [
-    { type: "screenshot", summary: "UPI app debit notification for ₹2,400 on 2026-09-22, Ref: DEMOUPI123456" }
-  ],
-  missing_fields: [],
-  verified_rule_id: "rbi_failed_transaction_upi_debit_not_credited",
-  timeline: [
-    { timestamp: "2026-09-22T14:30:00Z", event: "UPI Transaction executed - Debited ₹2,400" },
-    { timestamp: "2026-09-23T10:00:00Z", event: "Bank complaint submitted to Demo Bank (Ref: BK-98765)" },
-    { timestamp: "2026-10-01T04:20:00Z", event: "Simulated current date reached T+9 days. No bank response." }
-  ],
-  simulated_now: "2026-10-01T04:20:00Z",
-  complaint_status: "bank_complaint_submitted_no_response",
-  bank_complaint_date: "2026-09-23",
-  bank_response: "None received",
-  pending_actions: [
-    {
-      id: "act_nodal_01",
-      type: "nodal_officer_escalation",
-      status: "pending_approval",
-      requires_approval: true,
-      created_at: "2026-10-01T04:20:00Z",
-      payload: {
-        recipient: "nodal.officer@demobank.co.in",
-        subject: "Escalation: Unresolved UPI Failed Transaction DEMOUPI123456 - ₹2,400",
-        body: "Respected Nodal Officer,\n\nMy UPI payment of ₹2,400 on 2026-09-22 (Ref: DEMOUPI123456) was debited from my account but not credited to the beneficiary. I filed a complaint on 2026-09-23 (Ref: BK-98765), but no reversal or resolution has been provided within the RBI T+1 TAT timeline (9 days elapsed).\n\nPotential compensation estimate, subject to verification: ₹800 (8 days delayed beyond T+1 at ₹100/day).\n\nKindly process the immediate reversal and compensation."
-      },
-      simulated: true,
-      source_references: [verifiedRulesData.rules[0]]
+function loadDb(): DBStructure {
+  try {
+    if (fs.existsSync(dbFilePath)) {
+      const content = fs.readFileSync(dbFilePath, "utf-8");
+      return JSON.parse(content);
     }
-  ],
-  followups: [
-    {
-      id: "fu_01",
-      due_date: "2026-09-30T00:00:00Z",
-      condition: "bank_response_timeout_7_days",
-      action_type: "prepare_nodal_escalation",
-      status: "due"
-    }
-  ],
-  escalation_stage: "bank_complaint_pending_nodal",
-  trace: [
-    {
-      id: "tr_01",
-      timestamp: "2026-09-23T10:00:00Z",
-      event_type: "CLASSIFICATION",
-      label: "Classified as supported UPI failed debit",
-      tool_name: "classify_grievance",
-      branch: "supported_upi_failed_debit",
-      status: "success",
-      summary: "Case verified under RBI DPSS circular RBI/2019-20/67.",
-      source_ids: ["rbi_failed_transaction_upi_debit_not_credited"]
-    }
-  ],
-  source_references: [verifiedRulesData.rules[0]],
-  safety_flags: []
-};
+  } catch (e) {
+    console.error("Error loading db.json:", e);
+  }
 
-casesDb.set(demoCaseId, demoCaseState);
+  // Default initial DB with Demo Case RR-DEMO-001
+  const demoCaseId = "RR-DEMO-001";
+  const demoCaseState: CaseState = {
+    case_id: demoCaseId,
+    created_at: "2026-09-23T10:00:00Z",
+    updated_at: "2026-10-01T04:20:00Z",
+    user_language: "en",
+    user_profile: { name: "Demo User", email: "demo.user@example.com" },
+    transaction_facts: {
+      amount: 2400,
+      currency: "INR",
+      transaction_date: "2026-09-22",
+      transaction_reference: "DEMOUPI123456",
+      bank_or_provider: "Demo Bank",
+      transaction_type: "UPI",
+      transaction_status: "FAILED_DEBITED",
+      beneficiary_status: "NOT_CREDITED",
+      merchant_name: "QuickPay Merchant",
+      user_claimed_authorized: true,
+      confidence: 0.98,
+      missing_fields: []
+    },
+    classification: "supported_upi_failed_debited_not_credited",
+    classification_confidence: 0.99,
+    classification_rationale: "Payer account debited, beneficiary not credited, UPI payment system, verified within RBI TAT scope.",
+    branch: "supported_upi_failed_debit",
+    evidence_items: [
+      { type: "screenshot", summary: "UPI app debit notification for ₹2,400 on 2026-09-22, Ref: DEMOUPI123456" }
+    ],
+    missing_fields: [],
+    verified_rule_id: "rbi_failed_transaction_upi_debit_not_credited",
+    timeline: [
+      { timestamp: "2026-09-22T14:30:00Z", event: "UPI Transaction executed - Debited ₹2,400" },
+      { timestamp: "2026-09-23T10:00:00Z", event: "Bank complaint submitted to Demo Bank (Ref: BK-98765)" },
+      { timestamp: "2026-10-01T04:20:00Z", event: "Simulated current date reached T+9 days. No bank response." }
+    ],
+    simulated_now: "2026-10-01T04:20:00Z",
+    complaint_status: "bank_complaint_submitted_no_response",
+    bank_complaint_date: "2026-09-23",
+    bank_response: "None received",
+    pending_actions: [
+      {
+        id: "act_nodal_01",
+        type: "nodal_officer_escalation",
+        status: "pending_approval",
+        requires_approval: true,
+        created_at: "2026-10-01T04:20:00Z",
+        payload: {
+          recipient: "nodal.officer@demobank.co.in",
+          subject: "Escalation: Unresolved UPI Failed Transaction DEMOUPI123456 - ₹2,400",
+          body: "Respected Nodal Officer,\n\nMy UPI payment of ₹2,400 on 2026-09-22 (Ref: DEMOUPI123456) was debited from my account but not credited to the beneficiary. I filed a complaint on 2026-09-23 (Ref: BK-98765), but no reversal or resolution has been provided within the RBI T+1 TAT timeline (9 days elapsed).\n\nPotential compensation estimate, subject to verification: ₹800 (8 days delayed beyond T+1 at ₹100/day).\n\nKindly process the immediate reversal and compensation."
+        },
+        simulated: true,
+        source_references: [verifiedRulesData.rules[0]]
+      }
+    ],
+    followups: [
+      {
+        id: "fu_01",
+        due_date: "2026-09-30T00:00:00Z",
+        condition: "bank_response_timeout_7_days",
+        action_type: "prepare_nodal_escalation",
+        status: "due"
+      }
+    ],
+    escalation_stage: "bank_complaint_pending_nodal",
+    trace: [
+      {
+        id: "tr_01",
+        timestamp: "2026-09-23T10:00:00Z",
+        event_type: "CLASSIFICATION",
+        label: "Classified as supported UPI failed debit",
+        tool_name: "classify_grievance",
+        branch: "supported_upi_failed_debit",
+        status: "success",
+        summary: "Case verified under RBI DPSS circular RBI/2019-20/67.",
+        source_ids: ["rbi_failed_transaction_upi_debit_not_credited"]
+      }
+    ],
+    source_references: [verifiedRulesData.rules[0]],
+    safety_flags: []
+  };
+
+  const initialDb: DBStructure = {
+    cases: { [demoCaseId]: demoCaseState },
+    latestBatchSummary: null,
+    batchResults: []
+  };
+
+  saveDb(initialDb);
+  return initialDb;
+}
+
+function saveDb(data: DBStructure) {
+  try {
+    const dir = path.dirname(dbFilePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(dbFilePath, JSON.stringify(data, null, 2), "utf-8");
+  } catch (e) {
+    console.error("Error saving db.json:", e);
+  }
+}
 
 // Helper to record trace event
 function addTrace(caseState: CaseState, eventType: string, label: string, toolName: string, branch: string, status: string, summary: string, sourceIds: string[]) {
@@ -173,193 +210,32 @@ function addTrace(caseState: CaseState, eventType: string, label: string, toolNa
   return event;
 }
 
-// Tool Definitions for Gemini
-const toolDeclarations: FunctionDeclaration[] = [
-  {
-    name: "get_case_state",
-    description: "Retrieve current case state, timeline, evidence, and actions.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        case_id: { type: Type.STRING, description: "The case ID" }
-      },
-      required: ["case_id"]
-    }
-  },
-  {
-    name: "extract_transaction_evidence",
-    description: "Extract amount, date, transaction reference, bank, and beneficiary status from text or image input.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        raw_text: { type: Type.STRING, description: "User input text or OCR text" },
-        image_base64: { type: Type.STRING, description: "Optional base64 image data" }
-      },
-      required: ["raw_text"]
-    }
-  },
-  {
-    name: "classify_grievance",
-    description: "Classify the financial grievance into supported UPI failure, fraud, merchant refund, ATM, or missing evidence.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        amount: { type: Type.NUMBER },
-        transaction_date: { type: Type.STRING },
-        transaction_reference: { type: Type.STRING },
-        transaction_status: { type: Type.STRING },
-        beneficiary_status: { type: Type.STRING },
-        user_claimed_authorized: { type: Type.BOOLEAN },
-        description: { type: Type.STRING }
-      },
-      required: ["description"]
-    }
-  },
-  {
-    name: "lookup_verified_rule",
-    description: "Lookup the verified RBI circular rule based on transaction facts and classification.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        classification: { type: Type.STRING },
-        transaction_type: { type: Type.STRING }
-      },
-      required: ["classification"]
-    }
-  },
-  {
-    name: "calculate_deadline_and_estimate",
-    description: "Calculate transaction age, applicable TAT deadline, delay days, and potential compensation estimate.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        transaction_date: { type: Type.STRING },
-        simulated_now: { type: Type.STRING },
-        rule_id: { type: Type.STRING }
-      },
-      required: ["transaction_date", "simulated_now", "rule_id"]
-    }
-  },
-  {
-    name: "validate_ombudsman_preconditions",
-    description: "Validate preconditions for RBI Ombudsman 2026 scheme escalation.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        case_id: { type: Type.STRING }
-      },
-      required: ["case_id"]
-    }
-  },
-  {
-    name: "generate_bank_complaint",
-    description: "Generate structured complaint letter to the bank/payment provider.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        case_id: { type: Type.STRING }
-      },
-      required: ["case_id"]
-    }
-  },
-  {
-    name: "generate_nodal_officer_escalation",
-    description: "Generate escalation draft for bank Nodal Officer when bank fails to respond within TAT.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        case_id: { type: Type.STRING }
-      },
-      required: ["case_id"]
-    }
-  },
-  {
-    name: "generate_rbi_ombudsman_draft",
-    description: "Generate draft complaint for the RBI CMS Ombudsman portal under the 2026 scheme.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        case_id: { type: Type.STRING }
-      },
-      required: ["case_id"]
-    }
-  },
-  {
-    name: "generate_evidence_pack",
-    description: "Generate a structured evidence pack summary for export.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        case_id: { type: Type.STRING }
-      },
-      required: ["case_id"]
-    }
-  },
-  {
-    name: "draft_email",
-    description: "Draft an email action requiring user approval before sending.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        case_id: { type: Type.STRING },
-        action_type: { type: Type.STRING, description: "bank_complaint, nodal_officer_escalation, or rbi_ombudsman_draft" }
-      },
-      required: ["case_id", "action_type"]
-    }
-  },
-  {
-    name: "schedule_followup",
-    description: "Schedule a follow-up reminder timer for the case.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        case_id: { type: Type.STRING },
-        days_from_now: { type: Type.NUMBER },
-        condition: { type: Type.STRING }
-      },
-      required: ["case_id", "days_from_now", "condition"]
-    }
-  },
-  {
-    name: "simulate_time",
-    description: "Advance simulated clock by a number of days, run scheduler, and re-evaluate escalation.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        case_id: { type: Type.STRING },
-        days: { type: Type.NUMBER }
-      },
-      required: ["case_id", "days"]
-    }
-  }
-];
-
 // Tool Implementation Functions
 function executeTool(name: string, args: any, caseState?: CaseState): any {
   if (name === "get_case_state") {
-    const c = casesDb.get(args.case_id);
+    const db = loadDb();
+    const c = db.cases[args.case_id];
     if (!c) return { error: "Case not found" };
     return c;
   }
 
   if (name === "extract_transaction_evidence") {
     const text = args.raw_text || "";
-    // Simple regex extraction heuristic for prototype
     const amtMatch = text.match(/[₹Rs\.]\s*([0-9,]+(?:\.[0-9]{2})?)/i) || text.match(/([0-9,]+)\s*(?:rs|rupees|inr)/i);
     const amount = amtMatch ? parseFloat(amtMatch[1].replace(/,/g, "")) : 2400;
 
     const refMatch = text.match(/(?:ref|upi ref|transaction id|txn id|reference)[:\s#]*([a-zA-Z0-9]+)/i);
-    const ref = refMatch ? refMatch[1] : "UPI" + Math.floor(100000 + Math.random() * 900000);
+    const ref = refMatch ? refMatch[1] : "";
 
     const missing_fields = [];
     if (!amtMatch) missing_fields.push("amount");
-    if (!refMatch) missing_fields.push("transaction_reference");
+    if (!ref) missing_fields.push("transaction_reference");
 
     return {
       amount,
       currency: "INR",
       transaction_date: new Date().toISOString().split("T")[0],
-      transaction_reference: ref,
+      transaction_reference: ref || "UPI" + Math.floor(100000 + Math.random() * 900000),
       bank_or_provider: "User Bank",
       transaction_type: "UPI",
       transaction_status: "FAILED_DEBITED",
@@ -372,7 +248,7 @@ function executeTool(name: string, args: any, caseState?: CaseState): any {
 
   if (name === "classify_grievance") {
     const desc = (args.description || "").toLowerCase();
-    if (desc.includes("fraud") || desc.includes("did not make") || desc.includes("someone used") || desc.includes("unauthorized")) {
+    if (desc.includes("fraud") || desc.includes("did not make") || desc.includes("someone used") || desc.includes("unauthorized") || desc.includes("hacked")) {
       return {
         classification: "unauthorized_or_fraud",
         confidence: 0.98,
@@ -381,7 +257,7 @@ function executeTool(name: string, args: any, caseState?: CaseState): any {
         branch: "fraud_safety_branch"
       };
     }
-    if (desc.includes("merchant") || desc.includes("store") || desc.includes("cancelled my order") || desc.includes("refund")) {
+    if (desc.includes("merchant") || desc.includes("store") || desc.includes("cancelled my order") || desc.includes("refund") || desc.includes("flipkart") || desc.includes("amazon")) {
       return {
         classification: "merchant_refund",
         confidence: 0.92,
@@ -435,7 +311,7 @@ function executeTool(name: string, args: any, caseState?: CaseState): any {
   }
 
   if (name === "calculate_deadline_and_estimate") {
-    const txDate = new Date(args.transaction_date);
+    const txDate = new Date(args.transaction_date || Date.now());
     const now = new Date(args.simulated_now || new Date());
     const diffTime = Math.abs(now.getTime() - txDate.getTime());
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -454,7 +330,8 @@ function executeTool(name: string, args: any, caseState?: CaseState): any {
   }
 
   if (name === "validate_ombudsman_preconditions") {
-    const c = casesDb.get(args.case_id);
+    const db = loadDb();
+    const c = db.cases[args.case_id];
     if (!c) return { error: "Case not found" };
     const hasBankComplaint = !!c.bank_complaint_date;
     const complaintDate = hasBankComplaint ? new Date(c.bank_complaint_date!) : null;
@@ -473,112 +350,55 @@ function executeTool(name: string, args: any, caseState?: CaseState): any {
   }
 
   if (name === "generate_bank_complaint") {
-    const c = casesDb.get(args.case_id);
+    const db = loadDb();
+    const c = db.cases[args.case_id];
     if (!c) return { error: "Case not found" };
     return {
       subject: `Grievance: UPI Payment Failed & Debited (Ref: ${c.transaction_facts.transaction_reference})`,
-      body: `To Customer Support / Grievance Redressal Officer,\n\nMy UPI payment of ₹${c.transaction_facts.amount} dated ${c.transaction_facts.transaction_date} with UTR/Ref ${c.transaction_facts.transaction_reference} was debited from my account, but the beneficiary was not credited.\n\nAs per RBI Circular RBI/2019-20/67 (TAT for failed transactions), automatic reversal is mandated within T+1. Since this has exceeded TAT, I request immediate reversal and applicable compensation.\n\nDetails:\n- Amount: ₹${c.transaction_facts.amount}\n- Date: ${c.transaction_facts.transaction_date}\n- Reference: ${c.transaction_facts.transaction_reference}\n- Bank: ${c.transaction_facts.bank_or_provider}\n\nSincerely,\n${c.user_profile.name}`,
+      body: `To Customer Support / Grievance Redressal Officer,\n\nMy UPI payment of ₹${c.transaction_facts.amount} dated ${c.transaction_facts.transaction_date} with UTR/Ref ${c.transaction_facts.transaction_reference} was debited from my account, but the beneficiary was not credited.\n\nAs per RBI Circular RBI/2019-20/67 (TAT for failed transactions), automatic reversal is mandated within T+1. Since this has exceeded TAT, I request immediate reversal and applicable compensation.\n\nPotential compensation estimate, subject to verification.`,
       requested_relief: `Immediate reversal of ₹${c.transaction_facts.amount} plus compensation of ₹100 per day of delay.`,
       rule_citations: ["RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20"]
     };
   }
 
-  if (name === "generate_nodal_officer_escalation") {
-    const c = casesDb.get(args.case_id);
-    if (!c) return { error: "Case not found" };
-    return {
-      escalation_subject: `ESCALATION: Unresolved UPI Failed Transaction ${c.transaction_facts.transaction_reference}`,
-      escalation_body: `To Nodal Officer,\n\nInitial complaint regarding UPI failure (Ref: ${c.transaction_facts.transaction_reference}, Amount: ₹${c.transaction_facts.amount}) remains unresolved beyond TAT. Requesting urgent intervention and compensation.\n\nPotential compensation estimate, subject to verification.`,
-      approval_required: true,
-      source_references: [verifiedRulesData.rules[0]]
-    };
-  }
-
-  if (name === "generate_rbi_ombudsman_draft") {
-    const c = casesDb.get(args.case_id);
-    if (!c) return { error: "Case not found" };
-    return {
-      draft_complaint: `DRAFT RBI OMBUDSMAN COMPLAINT (CMS Portal)\nComplainant: ${c.user_profile.name}\nEntity: ${c.transaction_facts.bank_or_provider}\nIssue: UPI Debit without Credit (Ref: ${c.transaction_facts.transaction_reference})\nAmount: ₹${c.transaction_facts.amount}`,
-      not_submitted: true,
-      disclaimer: "This is a draft only. Prototype is not connected to CMS API. User must file manually on https://cms.rbi.org.in",
-      source: verifiedRulesData.rules[1]
-    };
-  }
-
-  if (name === "generate_evidence_pack") {
-    const c = casesDb.get(args.case_id);
-    if (!c) return { error: "Case not found" };
-    return {
-      case_id: c.case_id,
-      summary: "RefundRakshak Verified Evidence Pack",
-      transaction: c.transaction_facts,
-      timeline: c.timeline,
-      rule: verifiedRulesData.rules[0],
-      disclaimers: [
-        "Generated by RefundRakshak prototype",
-        "Not legal advice",
-        "Potential compensation estimate, subject to verification",
-        "Not proof of official submission"
-      ]
-    };
-  }
-
-  if (name === "draft_email") {
-    const c = casesDb.get(args.case_id);
-    if (!c) return { error: "Case not found" };
-    const actionId = "act_" + Math.random().toString(36).substring(2, 9);
-    const newAction = {
-      id: actionId,
-      type: args.action_type,
-      status: "pending_approval",
-      requires_approval: true,
-      created_at: new Date().toISOString(),
-      payload: {
-        recipient: "grievance@bank.co.in",
-        subject: `Draft: ${args.action_type} for Ref ${c.transaction_facts.transaction_reference}`,
-        body: `Generated draft body for ${args.action_type}. Amount: ₹${c.transaction_facts.amount}.`
-      },
-      simulated: true,
-      source_references: [verifiedRulesData.rules[0]]
-    };
-    c.pending_actions.push(newAction);
-    return newAction;
-  }
-
-  if (name === "schedule_followup") {
-    const c = casesDb.get(args.case_id);
-    if (!c) return { error: "Case not found" };
-    const dueDate = new Date(Date.now() + (args.days_from_now || 7) * 24 * 60 * 60 * 1000).toISOString();
-    const fu = {
-      id: "fu_" + Math.random().toString(36).substring(2, 9),
-      due_date: dueDate,
-      condition: args.condition,
-      action_type: "escalate_or_remind",
-      status: "due"
-    };
-    c.followups.push(fu);
-    return fu;
-  }
-
-  if (name === "simulate_time" || name === "simulate_time_tool") {
-    const c = casesDb.get(args.case_id);
+  if (name === "simulate_time") {
+    const db = loadDb();
+    const c = db.cases[args.case_id];
     if (!c) return { error: "Case not found" };
     const daysToAdd = args.days || 7;
     const currentSimDate = new Date(c.simulated_now);
     currentSimDate.setDate(currentSimDate.getDate() + daysToAdd);
     c.simulated_now = currentSimDate.toISOString();
 
-    // Advance timeline
     c.timeline.push({
       timestamp: c.simulated_now,
       event: `Simulated clock advanced by +${daysToAdd} days. Re-evaluating case status.`
     });
 
-    // Check escalation
     if (c.escalation_stage === "bank_complaint_pending_nodal" || c.escalation_stage.includes("bank_complaint")) {
       c.escalation_stage = "nodal_officer_escalation_ready";
+      // Generate nodal escalation action draft automatically on simulation
+      const nodalActionId = "act_nodal_" + Math.random().toString(36).substring(2, 9);
+      c.pending_actions.push({
+        id: nodalActionId,
+        type: "nodal_officer_escalation",
+        status: "pending_approval",
+        requires_approval: true,
+        created_at: c.simulated_now,
+        payload: {
+          recipient: "nodal.officer@bank.co.in",
+          subject: `ESCALATION: Unresolved UPI Failed Transaction ${c.transaction_facts.transaction_reference}`,
+          body: `Respected Nodal Officer,\n\nInitial complaint regarding UPI failure (Ref: ${c.transaction_facts.transaction_reference}, Amount: ₹${c.transaction_facts.amount}) remains unresolved beyond TAT after 7+ days. Requesting urgent intervention and compensation.\n\nPotential compensation estimate, subject to verification.`
+        },
+        simulated: true,
+        source_references: [verifiedRulesData.rules[0]]
+      });
+
       addTrace(c, "ESCALATION", "Bank response timeout reached after simulation", "simulate_time", "escalation_branch", "success", "No bank response received within timeframe. Nodal escalation draft prepared.", ["rbi_failed_transaction_upi_debit_not_credited"]);
     }
+
+    db.cases[args.case_id] = c;
+    saveDb(db);
 
     return {
       case_id: c.case_id,
@@ -591,11 +411,11 @@ function executeTool(name: string, args: any, caseState?: CaseState): any {
   return { error: "Unknown tool" };
 }
 
-// Gemini Agent Main Loop Handler
-async function runAgentTurn(caseId: string, userMessage: string, simulatedNow?: string, imageBase64?: string) {
-  let c = casesDb.get(caseId);
+// Agent Runner for Consumer Intake
+async function runAgentTurn(caseId: string, userMessage: string, simulatedNow?: string) {
+  const db = loadDb();
+  let c = db.cases[caseId];
   if (!c) {
-    // Create new case
     caseId = "RR-" + Math.floor(100000 + Math.random() * 900000);
     c = {
       case_id: caseId,
@@ -622,7 +442,7 @@ async function runAgentTurn(caseId: string, userMessage: string, simulatedNow?: 
       branch: "missing_evidence_branch",
       evidence_items: [],
       missing_fields: ["amount", "transaction_reference"],
-      timeline: [{ timestamp: new Date().toISOString(), event: "Case created." }],
+      timeline: [{ timestamp: new Date().toISOString(), event: "New case initialized." }],
       simulated_now: simulatedNow || new Date().toISOString(),
       complaint_status: "not_started",
       pending_actions: [],
@@ -632,14 +452,11 @@ async function runAgentTurn(caseId: string, userMessage: string, simulatedNow?: 
       source_references: [verifiedRulesData.rules[0]],
       safety_flags: []
     };
-    casesDb.set(caseId, c);
+    db.cases[caseId] = c;
   }
 
-  if (simulatedNow) {
-    c.simulated_now = simulatedNow;
-  }
+  if (simulatedNow) c.simulated_now = simulatedNow;
 
-  // Add user message to timeline
   c.timeline.push({
     timestamp: new Date().toISOString(),
     event: `User message: "${userMessage}"`
@@ -647,110 +464,116 @@ async function runAgentTurn(caseId: string, userMessage: string, simulatedNow?: 
 
   addTrace(c, "USER_INPUT", "Received user prompt", "agent_run", c.branch, "success", userMessage, []);
 
-  // System instruction for Gemini
-  const systemInstruction = `You are RefundRakshak, a cautious financial-grievance workflow agent for Indian users.
-Your responsibility is to help the user organize evidence, classify a financial grievance, apply only verified rules (RBI Circular RBI/2019-20/67 and RBI Ombudsman 2026), prepare appropriate communications, track follow-ups, and suggest permitted next steps.
-Never guarantee a refund, compensation, outcome, or legal eligibility. Use the exact phrase: "Potential compensation estimate, subject to verification."
-Use tools rather than guessing. If evidence is missing, ask a focused question instead of inventing facts. If fraud, merchant refund, or ATM/card case, choose the appropriate branch.
-Current simulated date: ${c.simulated_now}.
-Available tools: extract_transaction_evidence, classify_grievance, lookup_verified_rule, calculate_deadline_and_estimate, validate_ombudsman_preconditions, generate_bank_complaint, generate_nodal_officer_escalation, generate_rbi_ombudsman_draft, generate_evidence_pack, draft_email, schedule_followup.`;
+  const extraction = executeTool("extract_transaction_evidence", { raw_text: userMessage });
+  if (extraction.amount) c.transaction_facts.amount = extraction.amount;
+  if (extraction.transaction_reference) c.transaction_facts.transaction_reference = extraction.transaction_reference;
 
-  if (!apiKey) {
-    // Fallback if no API key is provided: perform deterministic smart rule processing
-    const extraction = executeTool("extract_transaction_evidence", { raw_text: userMessage });
-    c.transaction_facts = { ...c.transaction_facts, ...extraction };
-    const classification = executeTool("classify_grievance", { description: userMessage, transaction_reference: c.transaction_facts.transaction_reference });
-    c.classification = classification.classification;
-    c.classification_confidence = classification.confidence;
-    c.classification_rationale = classification.rationale;
-    c.branch = classification.branch;
-    c.missing_fields = classification.required_fields;
+  const classification = executeTool("classify_grievance", { description: userMessage, transaction_reference: c.transaction_facts.transaction_reference });
+  c.classification = classification.classification;
+  c.branch = classification.branch;
+  c.classification_rationale = classification.rationale;
+  c.missing_fields = classification.required_fields;
 
-    addTrace(c, "CLASSIFICATION", `Classified as ${c.classification}`, "classify_grievance", c.branch, "success", c.classification_rationale, ["rbi_failed_transaction_upi_debit_not_credited"]);
+  addTrace(c, "CLASSIFICATION", `Classified as ${c.classification}`, "classify_grievance", c.branch, "success", c.classification_rationale, ["rbi_failed_transaction_upi_debit_not_credited"]);
 
-    let responseMessage = "";
-    if (c.classification === "missing_evidence") {
-      responseMessage = `I noticed some details are missing (such as transaction reference or amount). Could you please provide the transaction reference number and exact amount?`;
-    } else if (c.classification === "unauthorized_or_fraud") {
-      responseMessage = `⚠️ Fraud branch selected. Ordinary failed-payment compensation flow stopped. Please contact your bank immediately and report this to the National Cyber Crime Reporting Portal (cybercrime.gov.in).`;
-    } else if (c.classification === "merchant_refund") {
-      responseMessage = `🛒 Merchant refund branch selected. Awaiting merchant refund settlement. Please provide the merchant name and order ID.`;
-    } else {
-      const ruleLookup = executeTool("lookup_verified_rule", { classification: c.classification, transaction_type: "UPI" });
-      const calc = executeTool("calculate_deadline_and_estimate", { transaction_date: c.transaction_facts.transaction_date, simulated_now: c.simulated_now, rule_id: ruleLookup.rule_id });
-      responseMessage = `I have analyzed your UPI failed transaction (Ref: ${c.transaction_facts.transaction_reference}, Amount: ₹${c.transaction_facts.amount}).\n\n- Verified Rule: ${ruleLookup.source.title} (${ruleLookup.source.notification_number})\n- Applicable Deadline: ${calc.applicable_deadline} (T+1)\n- Days Delayed: ${calc.days_delayed}\n- Potential compensation estimate, subject to verification: ₹${calc.potential_compensation_estimate}\n\nWould you like me to prepare the bank complaint or generate the evidence pack?`;
-    }
-
-    return {
-      case_id: c.case_id,
-      message: responseMessage,
-      language: c.user_language,
-      status: c.missing_fields.length > 0 ? "needs_input" : "completed",
-      pending_question: c.missing_fields.length > 0 ? "Please provide missing transaction details." : undefined,
-      actions: c.pending_actions,
-      case_state: c,
-      trace: c.trace,
-      sources: c.source_references
-    };
+  let responseMessage = "";
+  if (c.classification === "missing_evidence") {
+    responseMessage = `I noticed some details are missing (such as transaction reference or amount). Could you please provide the transaction reference number and exact amount?`;
+  } else if (c.classification === "unauthorized_or_fraud") {
+    responseMessage = `⚠️ Fraud branch selected. Ordinary failed-payment compensation flow stopped. Please contact your bank immediately and report this to the National Cyber Crime Reporting Portal (cybercrime.gov.in).`;
+  } else if (c.classification === "merchant_refund") {
+    responseMessage = `🛒 Merchant refund branch selected. Awaiting merchant refund settlement. Please provide the merchant name and order ID.`;
+  } else {
+    const ruleLookup = executeTool("lookup_verified_rule", { classification: c.classification, transaction_type: "UPI" });
+    const calc = executeTool("calculate_deadline_and_estimate", { transaction_date: c.transaction_facts.transaction_date, simulated_now: c.simulated_now, rule_id: ruleLookup.rule_id });
+    responseMessage = `I have analyzed your UPI failed transaction (Ref: ${c.transaction_facts.transaction_reference}, Amount: ₹${c.transaction_facts.amount}).\n\n- Verified Rule: ${ruleLookup.source.title} (${ruleLookup.source.notification_number})\n- Applicable Deadline: ${calc.applicable_deadline} (T+1)\n- Days Delayed: ${calc.days_delayed}\n- Potential compensation estimate, subject to verification: ₹${calc.potential_compensation_estimate}\n\nWould you like me to prepare the bank complaint or generate the evidence pack?`;
   }
 
-  // Use Gemini SDK with tool calling loop
-  try {
-    const aiModel = ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        { role: "user", parts: [{ text: `User message: "${userMessage}". Current case ID: ${c.case_id}. Current transaction facts: ${JSON.stringify(c.transaction_facts)}` }] }
-      ],
-      config: {
-        systemInstruction,
-        tools: [{ functionDeclarations: toolDeclarations }],
-        temperature: 0.2
-      }
+  db.cases[caseId] = c;
+  saveDb(db);
+
+  return {
+    case_id: c.case_id,
+    message: responseMessage,
+    language: c.user_language,
+    status: c.missing_fields.length > 0 ? "needs_input" : "completed",
+    actions: c.pending_actions,
+    case_state: c,
+    trace: c.trace,
+    sources: c.source_references
+  };
+}
+
+// B2B Batch Triage Processor
+function triageSingleComplaint(comp: { complaint_id: string; text?: string; amount?: number; transaction_date?: string; bank?: string; reference?: string; status?: string }) {
+  const fullText = comp.text || `Failed payment of ₹${comp.amount || 2400} on ${comp.transaction_date || '2026-09-20'} ref ${comp.reference || 'UPI123'}`;
+  const extraction = executeTool("extract_transaction_evidence", { raw_text: fullText });
+  const amount = comp.amount || extraction.amount;
+  const txDate = comp.transaction_date || "2026-09-20";
+  const ref = comp.reference || extraction.transaction_reference;
+
+  const classificationRes = executeTool("classify_grievance", { description: fullText, transaction_reference: ref });
+  const classification = classificationRes.classification;
+  const branch = classificationRes.branch;
+
+  let tatBreached = false;
+  let daysDelayed = 0;
+  let potentialComp = 0;
+  let caveat = "Potential compensation estimate, subject to verification.";
+  let recommendedAction = "Process standard reversal within T+1";
+  let draftedReply = "We are reviewing your transaction failure.";
+  let priority = "medium";
+
+  if (classification === "supported_upi_failed_debited_not_credited") {
+    const calc = executeTool("calculate_deadline_and_estimate", {
+      transaction_date: txDate,
+      simulated_now: "2026-10-01T00:00:00Z",
+      rule_id: "rbi_failed_transaction_upi_debit_not_credited"
     });
-
-    // For robust reliability, we execute a rule extraction and return response
-    const extraction = executeTool("extract_transaction_evidence", { raw_text: userMessage });
-    if (extraction.amount) c.transaction_facts.amount = extraction.amount;
-    if (extraction.transaction_reference) c.transaction_facts.transaction_reference = extraction.transaction_reference;
-
-    const classification = executeTool("classify_grievance", { description: userMessage, transaction_reference: c.transaction_facts.transaction_reference });
-    c.classification = classification.classification;
-    c.branch = classification.branch;
-    c.classification_rationale = classification.rationale;
-
-    addTrace(c, "AGENT_TURN", "Gemini agent processed user prompt", "gemini_model", c.branch, "success", userMessage, ["rbi_failed_transaction_upi_debit_not_credited"]);
-
-    return {
-      case_id: c.case_id,
-      message: `Processed via RefundRakshak Agent. Grievance classified as: ${c.classification}. Branch: ${c.branch}.`,
-      language: c.user_language,
-      status: "completed",
-      actions: c.pending_actions,
-      case_state: c,
-      trace: c.trace,
-      sources: c.source_references
-    };
-  } catch (err: any) {
-    console.error("Gemini model error:", err);
-    return {
-      case_id: c.case_id,
-      message: `Processed case with deterministic engine due to AI model timeout. Classification: ${c.classification}`,
-      language: c.user_language,
-      status: "completed",
-      actions: c.pending_actions,
-      case_state: c,
-      trace: c.trace,
-      sources: c.source_references
-    };
+    daysDelayed = calc.days_delayed;
+    tatBreached = daysDelayed > 0;
+    potentialComp = calc.potential_compensation_estimate;
+    priority = daysDelayed > 5 ? "high" : (daysDelayed > 0 ? "medium" : "low");
+    recommendedAction = tatBreached ? `Immediate reversal + pay ₹${potentialComp} compensation` : `Process reversal within T+1 TAT`;
+    draftedReply = `Dear Customer, regarding your UPI transaction ${ref} of ₹${amount}, we acknowledge the debit-not-credited issue. We are processing your reversal and applicable compensation.`;
+  } else if (classification === "unauthorized_or_fraud") {
+    priority = "high";
+    recommendedAction = "Route to Fraud Risk Ops & Cyber Cell reporting";
+    draftedReply = `Dear Customer, we have noted your fraud report regarding transaction ${ref}. Please contact your bank immediately and file a cybercrime report at cybercrime.gov.in.`;
+  } else if (classification === "merchant_refund") {
+    priority = "low";
+    recommendedAction = "Verify merchant settlement status with acquirer";
+    draftedReply = `Dear Customer, regarding your merchant refund for transaction ${ref}, we are coordinating with the merchant settlement gateway.`;
+  } else {
+    priority = "medium";
+    recommendedAction = "Request customer to provide missing transaction reference and date";
+    draftedReply = `Dear Customer, we require additional details (reference number and exact date) to investigate your complaint.`;
   }
+
+  return {
+    complaint_id: comp.complaint_id || "COMP-" + Math.floor(1000 + Math.random() * 9000),
+    amount,
+    transaction_date: txDate,
+    reference: ref,
+    classification,
+    branch,
+    tat_breached: tatBreached,
+    days_delayed: daysDelayed,
+    potential_compensation_inr: potentialComp,
+    caveat,
+    recommended_action: recommendedAction,
+    drafted_customer_reply: draftedReply,
+    priority
+  };
 }
 
 // API Routes
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", agent: "RefundRakshak" });
+  res.json({ status: "ok", agent: "RefundRakshak B2B & Consumer Copilot" });
 });
 
 app.post("/api/cases", (req, res) => {
+  const db = loadDb();
   const caseId = "RR-" + Math.floor(100000 + Math.random() * 900000);
   const newCase: CaseState = {
     case_id: caseId,
@@ -787,28 +610,29 @@ app.post("/api/cases", (req, res) => {
     source_references: [verifiedRulesData.rules[0]],
     safety_flags: []
   };
-  casesDb.set(caseId, newCase);
+  db.cases[caseId] = newCase;
+  saveDb(db);
   res.json(newCase);
 });
 
 app.get("/api/cases", (req, res) => {
-  const list = Array.from(casesDb.values());
-  res.json(list);
+  const db = loadDb();
+  res.json(Object.values(db.cases));
 });
 
 app.get("/api/cases/:case_id", (req, res) => {
-  const c = casesDb.get(req.params.case_id);
+  const db = loadDb();
+  const c = db.cases[req.params.case_id];
   if (!c) return res.status(404).json({ error: "Case not found" });
   res.json(c);
 });
 
 app.post("/api/agent/run", async (req, res) => {
   try {
-    const { case_id, message, language, simulated_now, image_base64 } = req.body;
-    const result = await runAgentTurn(case_id, message || "", simulated_now, image_base64);
+    const { case_id, message, simulated_now } = req.body;
+    const result = await runAgentTurn(case_id, message || "", simulated_now);
     res.json(result);
   } catch (err: any) {
-    console.error("Agent run error:", err);
     res.status(500).json({ error: err.message || "Agent execution failed" });
   }
 });
@@ -817,7 +641,8 @@ app.post("/api/cases/:case_id/simulate-time", (req, res) => {
   try {
     const { days } = req.body;
     const resSim = executeTool("simulate_time", { case_id: req.params.case_id, days: days || 7 });
-    const c = casesDb.get(req.params.case_id);
+    const db = loadDb();
+    const c = db.cases[req.params.case_id];
     res.json({
       case_id: req.params.case_id,
       simulated_now: c?.simulated_now,
@@ -833,10 +658,11 @@ app.post("/api/cases/:case_id/simulate-time", (req, res) => {
 
 app.post("/api/actions/:action_id/approve", (req, res) => {
   const actionId = req.params.action_id;
+  const db = loadDb();
   let foundAction: any = null;
   let foundCase: any = null;
 
-  for (const c of casesDb.values()) {
+  for (const c of Object.values(db.cases)) {
     const act = c.pending_actions.find((a: any) => a.id === actionId);
     if (act) {
       act.status = "approved_and_executed";
@@ -848,14 +674,16 @@ app.post("/api/actions/:action_id/approve", (req, res) => {
   }
 
   if (!foundAction) return res.status(404).json({ error: "Action not found" });
+  saveDb(db);
   res.json({ status: "success", action: foundAction, case_state: foundCase });
 });
 
 app.post("/api/actions/:action_id/reject", (req, res) => {
   const actionId = req.params.action_id;
+  const db = loadDb();
   let foundAction: any = null;
 
-  for (const c of casesDb.values()) {
+  for (const c of Object.values(db.cases)) {
     const act = c.pending_actions.find((a: any) => a.id === actionId);
     if (act) {
       act.status = "rejected";
@@ -866,12 +694,98 @@ app.post("/api/actions/:action_id/reject", (req, res) => {
   }
 
   if (!foundAction) return res.status(404).json({ error: "Action not found" });
+  saveDb(db);
   res.json({ status: "success", action: foundAction });
 });
 
 app.get("/api/cases/:case_id/evidence-pack", (req, res) => {
   const pack = executeTool("generate_evidence_pack", { case_id: req.params.case_id });
   res.json(pack);
+});
+
+// B2B Endpoints
+app.post("/api/b2b/triage-batch", (req, res) => {
+  try {
+    let complaints = req.body.complaints || [];
+
+    // Support CSV text upload parsing if req.body is CSV text or raw body
+    if (typeof req.body === "string" || req.body.csv_text) {
+      const csvText = typeof req.body === "string" ? req.body : req.body.csv_text;
+      const lines = csvText.split("\n").filter((l: string) => l.trim().length > 0);
+      complaints = [];
+      for (let i = 1; i < lines.length; i++) {
+        const parts = lines[i].split(",").map((p: string) => p.trim());
+        if (parts.length >= 2) {
+          complaints.push({
+            complaint_id: parts[0] || `COMP-${i}`,
+            text: parts[1] || "UPI failed debit",
+            amount: parseFloat(parts[2]) || 1500,
+            transaction_date: parts[3] || "2026-09-20",
+            reference: parts[4] || "UPI" + i
+          });
+        }
+      }
+    }
+
+    if (!Array.isArray(complaints) || complaints.length === 0) {
+      return res.status(400).json({ error: "No complaints provided in batch." });
+    }
+
+    const results = complaints.map((c: any) => triageSingleComplaint(c));
+
+    const totalComplaints = results.length;
+    let breachedCount = 0;
+    let totalExposure = 0;
+    const classificationCounts: Record<string, number> = {};
+
+    results.forEach((r: any) => {
+      classificationCounts[r.classification] = (classificationCounts[r.classification] || 0) + 1;
+      if (r.tat_breached) breachedCount++;
+      totalExposure += r.potential_compensation_inr;
+    });
+
+    const topPriorityCases = [...results].sort((a, b) => b.potential_compensation_inr - a.potential_compensation_inr).slice(0, 5);
+
+    const summary = {
+      total_complaints: totalComplaints,
+      classification_counts: classificationCounts,
+      breached_count: breachedCount,
+      total_compensation_exposure: totalExposure,
+      top_priority_cases: topPriorityCases
+    };
+
+    const db = loadDb();
+    db.latestBatchSummary = summary;
+    db.batchResults = results;
+    saveDb(db);
+
+    res.json({
+      summary,
+      results
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Batch triage failed" });
+  }
+});
+
+app.get("/api/b2b/exposure-report", (req, res) => {
+  const db = loadDb();
+  const format = req.query.format || "json";
+
+  if (format === "csv") {
+    let csv = "ComplaintID,Amount,Date,Reference,Classification,Branch,TATBreached,DaysDelayed,CompensationINR,Priority,RecommendedAction\n";
+    (db.batchResults || []).forEach((r: any) => {
+      csv += `${r.complaint_id},${r.amount},${r.transaction_date},${r.reference},${r.classification},${r.branch},${r.tat_breached},${r.days_delayed},${r.potential_compensation_inr},${r.priority},"${r.recommended_action}"\n`;
+    });
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=refundrakshak_exposure_report.csv");
+    return res.send(csv);
+  }
+
+  res.json({
+    summary: db.latestBatchSummary || { total_complaints: 0, total_compensation_exposure: 0 },
+    results: db.batchResults || []
+  });
 });
 
 // Vite middleware integration for development

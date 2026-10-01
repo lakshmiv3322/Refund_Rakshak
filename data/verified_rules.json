@@ -23,8 +23,8 @@
         "Does not apply to ATM cash non-dispensation cases (separate TAT rule applies)",
         "Potential compensation estimate, subject to verification by the regulated entity"
       ],
-      "verified_at": "2026-10-01",
-      "status": "active"
+      "verified_at": null,
+      "status": "needs_manual_verification"
     },
     {
       "rule_id": "rbi_integrated_ombudsman_scheme_2026",
@@ -44,8 +44,8 @@
         "Must first raise complaint with bank/regulated entity and retain reference number",
         "Prototype generates draft only; actual submission requires user verification on official CMS portal"
       ],
-      "verified_at": "2026-10-01",
-      "status": "active"
+      "verified_at": null,
+      "status": "needs_manual_verification"
     }
   ]
 }

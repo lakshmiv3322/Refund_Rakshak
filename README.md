@@ -1,44 +1,36 @@
 # RefundRakshak 🛡️💰
 **"Get your money back, automatically."**
 
-RefundRakshak is a multilingual, tool-using AI agent built for the **BharatAgentic Hackathon** powered by aiKart. It helps Indian users pursue eligible financial-service grievances—starting with UPI failed debit transactions where money was debited but the beneficiary was not credited and reversal was delayed.
+RefundRakshak is a multilingual, tool-using AI agent built for the **BharatAgentic Hackathon** powered by aiKart. It now operates as a **two-sided product**:
+1. **Consumer Side (Free Copilot)**: Multilingual intake chat, transaction evidence extraction, rule matching, and escalation draft preparation.
+2. **Business Side (B2B Complaint-Ops Copilot)**: Bulk complaint triage for regulated entities (banks and payment apps), TAT breach detection, compensation exposure calculation, and exposure report CSV generation.
 
 ---
 
-### Key Features
-- **Multilingual Support**: English, Hindi, and Tamil conversational capabilities.
-- **Gemini Function Calling**: Dynamic tool selection for evidence extraction, grievance classification, rule lookup, TAT calculation, and escalation drafting.
-- **Deterministic Rule Engine**: Powered by verified RBI Circulars (RBI/2019-20/67) and the RBI Integrated Ombudsman Scheme 2026.
-- **Simulated Time Control ("Simulate +7 days")**: Live simulation testing of escalation timelines and scheduler triggering.
-- **Explicit User Approval**: Mandatory approval before sending emails or official communications.
-- **Simulated Outbox & Evidence Pack**: Exportable case summaries and structured complaint histories.
+### Business Model & Monetization
+- **Consumer Intake**: Free for retail users to democratize access to financial grievance redressal.
+- **Regulated Entities (B2B SaaS / Copilot)**: Paid subscription model (per-seat or per-complaint volume pricing) for banks, fintechs, and payment gateway operators.
+  - **Value Proposition**: Reduces SLA breaches, minimizes potential RBI compensation liability and Ombudsman escalation risks, and accelerates resolution workflows.
 
 ---
 
-### Agent Workflow
-1. **Intake & Evidence Extraction**: Extracts amount, date, UTR, and status from text or screenshots.
-2. **Grievance Classification**: Routes into supported UPI failed debit, fraud safety branch, merchant refund branch, or missing evidence branch.
-3. **Verified Rule Application**: Matches transaction facts against RBI Turn Around Time (TAT) T+1 rule.
-4. **Compensation & Deadline Calculation**: Computes days delayed and potential compensation estimate.
-5. **Escalation Planning**: Generates bank complaints, Nodal Officer escalations, and RBI Ombudsman drafts.
+### Rule Verification Checklist
+Before production deployment, confirm the following official rows and figures against statutory sources:
+1. **UPI Failed Transaction (Debit without Credit)**:
+   - Source: RBI Circular `RBI/2019-20/67` (DPSS.CO.PD No.629/02.01.014/2019-20).
+   - Figure to confirm: T+1 automatic reversal deadline and ₹100 per day compensation rule.
+2. **RBI Integrated Ombudsman Scheme**:
+   - Source: Reserve Bank–Integrated Ombudsman Scheme, 2026 (`SCHEME16012026_A.pdf`).
+   - Figure to confirm: 30-day waiting period from initial bank complaint before CMS portal escalation (`https://cms.rbi.org.in`).
 
 ---
 
-### Tool List
-- `get_case_state`
-- `extract_transaction_evidence`
-- `classify_grievance`
-- `lookup_verified_rule`
-- `calculate_deadline_and_estimate`
-- `validate_ombudsman_preconditions`
-- `generate_bank_complaint`
-- `generate_nodal_officer_escalation`
-- `generate_rbi_ombudsman_draft`
-- `generate_evidence_pack`
-- `draft_email`
-- `send_email_with_confirmation`
-- `schedule_followup`
-- `simulate_time`
+### API Endpoints
+- `POST /api/agent/run` — Consumer agent turn & tool call loop.
+- `POST /api/b2b/triage-batch` — Bulk complaint triage and exposure calculation.
+- `GET /api/b2b/exposure-report?format=json|csv` — Downloadable exposure reports.
+- `POST /api/cases/{case_id}/simulate-time` — Advance simulated time by $N$ days.
+- `GET /api/health` — Health check endpoint.
 
 ---
 
@@ -52,25 +44,26 @@ RefundRakshak is a multilingual, tool-using AI agent built for the **BharatAgent
    cp .env.example .env
    # Add your GEMINI_API_KEY
    ```
-3. Run development server:
+3. Run tests:
+   ```bash
+   npm test
+   ```
+4. Run development server:
    ```bash
    npm run dev
    ```
-4. Access app at `http://localhost:3000`.
 
 ---
 
-### Docker Setup
+### Docker & Docker Compose
 ```bash
-docker build -t refundrakshak .
-docker run --env-file .env -p 3000:3000 refundrakshak
-curl http://localhost:3000/api/health
+docker-compose up --build
+curl http://localhost:8000/api/health
 ```
 
 ---
 
-### Disclaimers & Safety
-- **Potential compensation estimate, subject to verification.**
+### Safety & Disclaimers
+- **"Potential compensation estimate, subject to verification."**
 - This prototype is not legal advice and does not guarantee recovery.
-- External submissions are simulated unless configured.
 - Sensitive financial data (UPI PINs, passwords, OTPs) is never requested or stored.
