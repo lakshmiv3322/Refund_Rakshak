@@ -10,9 +10,7 @@ import {
   ExternalLink,
   Sparkles,
   Download,
-  Upload,
   BarChart3,
-  Users,
   ChevronDown,
   ChevronUp,
   RefreshCw
@@ -30,7 +28,7 @@ export default function App() {
   ]);
   const [inputMessage, setInputMessage] = useState("");
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"chat" | "trace" | "evidence" | "outbox" | "rules">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "trace" | "evidence" | "rules">("chat");
   const [evidencePack, setEvidencePack] = useState<any>(null);
 
   // B2B state
@@ -101,6 +99,10 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ days })
       });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Simulation failed: ${res.status} ${errText}`);
+      }
       const data = await res.json();
       if (data.case_state) {
         setCaseState(data.case_state);
@@ -109,8 +111,9 @@ export default function App() {
         ...prev,
         { role: "assistant", content: `⏱️ Simulated clock advanced by +${days} days. Nodal officer escalation draft prepared if bank response timed out.` }
       ]);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Simulation error", err);
+      alert(err.message || "Simulation error occurred.");
     } finally {
       setLoading(false);
     }
@@ -153,11 +156,11 @@ export default function App() {
     }
   };
 
-  // Load 25 synthetic complaints
+  // Load 25 synthetic complaints (with ~3 intentionally missing fields to test Fix 3)
   const loadSyntheticComplaints = async () => {
     setLoading(true);
     const syntheticList = [
-      // 12 Supported debited not credited with varied ages
+      // 10 Supported debited not credited with varied ages
       { complaint_id: "COMP-101", text: "UPI debit of 2400 failed 9 days ago", amount: 2400, transaction_date: "2026-09-22", reference: "UPI101" },
       { complaint_id: "COMP-102", text: "Money debited Rs 1500 not credited, 5 days ago", amount: 1500, transaction_date: "2026-09-26", reference: "UPI102" },
       { complaint_id: "COMP-103", text: "UPI payment Rs 5000 failed and debited 3 days ago", amount: 5000, transaction_date: "2026-09-28", reference: "UPI103" },
@@ -168,8 +171,11 @@ export default function App() {
       { complaint_id: "COMP-108", text: "Rs 4500 debited via UPI not received by beneficiary 6 days ago", amount: 4500, transaction_date: "2026-09-25", reference: "UPI108" },
       { complaint_id: "COMP-109", text: "UPI failed debit Rs 1200 10 days ago", amount: 1200, transaction_date: "2026-09-21", reference: "UPI109" },
       { complaint_id: "COMP-110", text: "Rs 600 debited not credited 2 days ago", amount: 600, transaction_date: "2026-09-29", reference: "UPI110" },
-      { complaint_id: "COMP-111", text: "UPI payment Rs 2200 debited failed 11 days ago", amount: 2200, transaction_date: "2026-09-20", reference: "UPI111" },
-      { complaint_id: "COMP-112", text: "Rs 3000 UPI debit without credit 1 day ago", amount: 3000, transaction_date: "2026-09-30", reference: "UPI112" },
+
+      // 3 Intentionally Missing fields (Fix 3)
+      { complaint_id: "COMP-MISS-1", text: "Money deducted but no ref", amount: 1500, transaction_date: "", reference: "" },
+      { complaint_id: "COMP-MISS-2", text: "UPI failure", amount: null, transaction_date: "2026-09-25", reference: "" },
+      { complaint_id: "COMP-MISS-3", text: "Payment stuck", amount: 2000, transaction_date: "", reference: "UPI999" },
 
       // 3 Fraud / Unauthorized
       { complaint_id: "COMP-201", text: "I did not make this UPI payment of 15000. Someone used my account fraudulently.", amount: 15000, transaction_date: "2026-09-29", reference: "FRD201" },
@@ -185,14 +191,11 @@ export default function App() {
       { complaint_id: "COMP-401", text: "ATM cash withdrawal Rs 5000 failed but my card account was debited", amount: 5000, transaction_date: "2026-09-25", reference: "ATM401" },
       { complaint_id: "COMP-402", text: "ATM machine did not dispense cash for Rs 2000", amount: 2000, transaction_date: "2026-09-26", reference: "ATM402" },
 
-      // 3 Missing Reference
-      { complaint_id: "COMP-501", text: "Money deducted", amount: 1000, transaction_date: "2026-09-28", reference: "" },
-      { complaint_id: "COMP-502", text: "Payment failed help", amount: 500, transaction_date: "2026-09-29", reference: "" },
-      { complaint_id: "COMP-503", text: "Transaction stuck", amount: 1800, transaction_date: "2026-09-27", reference: "" },
-
-      // 2 Unknown
+      // 4 Other / Unknown
       { complaint_id: "COMP-601", text: "General query about transaction charges", amount: 100, transaction_date: "2026-09-25", reference: "UNK601" },
-      { complaint_id: "COMP-602", text: "Bank statement discrepancy", amount: 350, transaction_date: "2026-09-24", reference: "UNK602" }
+      { complaint_id: "COMP-602", text: "Bank statement discrepancy", amount: 350, transaction_date: "2026-09-24", reference: "UNK602" },
+      { complaint_id: "COMP-603", text: "App login issue", amount: 500, transaction_date: "2026-09-23", reference: "UNK603" },
+      { complaint_id: "COMP-604", text: "Interest rate query", amount: 1200, transaction_date: "2026-09-22", reference: "UNK604" }
     ];
 
     try {
@@ -206,26 +209,6 @@ export default function App() {
       setB2bResults(data.results);
     } catch (e) {
       console.error("Batch triage failed", e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCsvUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!csvInput.trim()) return;
-    setLoading(true);
-    try {
-      const res = await fetch("/api/b2b/triage-batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ csv_text: csvInput })
-      });
-      const data = await res.json();
-      setB2bSummary(data.summary);
-      setB2bResults(data.results);
-    } catch (e) {
-      console.error("CSV triage failed", e);
     } finally {
       setLoading(false);
     }
@@ -294,10 +277,9 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main View: Consumer vs B2B */}
+      {/* Main View */}
       {appMode === "consumer" ? (
         <div className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Sidebar */}
           <div className="lg:col-span-4 space-y-6">
             <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur">
               <div className="flex items-center justify-between mb-4">
@@ -394,7 +376,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Right Main Area */}
           <div className="lg:col-span-8 flex flex-col bg-slate-900/90 border border-slate-800 rounded-2xl shadow-xl backdrop-blur overflow-hidden">
             <div className="flex border-b border-slate-800 bg-slate-950/40 px-4 py-2 space-x-2 overflow-x-auto">
               <button
@@ -545,7 +526,7 @@ export default function App() {
           </div>
         </div>
       ) : (
-        /* B2B Mode: RefundRakshak for Regulated Entities */
+        /* B2B Mode */
         <div className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 space-y-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl">
             <div>
@@ -576,9 +557,9 @@ export default function App() {
             </div>
           </div>
 
-          {/* Summary KPI Cards */}
+          {/* Summary KPI Cards including Needs Info (Fix 3) */}
           {b2bSummary && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-lg">
                 <div className="text-xs text-slate-400 uppercase font-medium">Total Complaints</div>
                 <div className="text-3xl font-bold text-white mt-1">{b2bSummary.total_complaints}</div>
@@ -592,12 +573,17 @@ export default function App() {
                 <div className="text-3xl font-bold text-amber-300 mt-1">₹{b2bSummary.total_compensation_exposure.toLocaleString()}</div>
                 <div className="text-[10px] text-slate-500 mt-1">Subject to verification</div>
               </div>
+              <div className="bg-slate-900/90 border border-cyan-500/30 rounded-2xl p-5 shadow-lg">
+                <div className="text-xs text-cyan-400 uppercase font-medium">Needs Info</div>
+                <div className="text-3xl font-bold text-cyan-300 mt-1">{b2bSummary.needs_info_count}</div>
+                <div className="text-[10px] text-slate-500 mt-1">Missing evidence rows</div>
+              </div>
               <div className="bg-slate-900/90 border border-indigo-500/30 rounded-2xl p-5 shadow-lg">
                 <div className="text-xs text-indigo-400 uppercase font-medium">Classifications</div>
                 <div className="text-xs text-slate-300 mt-2 space-y-1">
                   {Object.entries(b2bSummary.classification_counts || {}).map(([k, v]: any) => (
                     <div key={k} className="flex justify-between">
-                      <span className="truncate max-w-[140px]">{k}:</span>
+                      <span className="truncate max-w-[120px]">{k}:</span>
                       <span className="font-mono font-bold text-white">{v}</span>
                     </div>
                   ))}
@@ -606,7 +592,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Complaints Results Table */}
+          {/* Results Table */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-200">Triaged Complaints & Exposure Feed</h3>
@@ -620,11 +606,11 @@ export default function App() {
                     <tr>
                       <th className="px-6 py-3">ID & Ref</th>
                       <th className="px-6 py-3">Amount</th>
+                      <th className="px-6 py-3">Date</th>
                       <th className="px-6 py-3">Classification</th>
-                      <th className="px-6 py-3">Branch</th>
+                      <th className="px-6 py-3">Branch / Missing</th>
                       <th className="px-6 py-3">TAT Breached?</th>
                       <th className="px-6 py-3">Exposure (₹)</th>
-                      <th className="px-6 py-3">Priority</th>
                       <th className="px-6 py-3 text-right">Actions</th>
                     </tr>
                   </thead>
@@ -634,15 +620,20 @@ export default function App() {
                         <tr className="hover:bg-slate-800/40 transition">
                           <td className="px-6 py-4 font-mono font-medium text-white">
                             <div>{r.complaint_id}</div>
-                            <div className="text-[10px] text-slate-400">{r.reference}</div>
+                            <div className="text-[10px] text-slate-400">{r.reference !== null ? r.reference : "-"}</div>
                           </td>
-                          <td className="px-6 py-4 font-bold text-emerald-400">₹{r.amount}</td>
+                          <td className="px-6 py-4 font-bold text-emerald-400">
+                            {r.amount !== null ? `₹${r.amount}` : "-"}
+                          </td>
+                          <td className="px-6 py-4 text-slate-300">
+                            {r.transaction_date !== null ? r.transaction_date : "-"}
+                          </td>
                           <td className="px-6 py-4 text-slate-300">{r.classification}</td>
                           <td className="px-6 py-4">
                             <span className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border ${
-                              r.tat_breached ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                              r.classification === 'missing_evidence' ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30' : (r.tat_breached ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30')
                             }`}>
-                              {r.branch}
+                              {r.classification === 'missing_evidence' && r.missing_fields?.length > 0 ? `Missing: ${r.missing_fields.join(", ")}` : r.branch}
                             </span>
                           </td>
                           <td className="px-6 py-4">
@@ -653,19 +644,12 @@ export default function App() {
                             )}
                           </td>
                           <td className="px-6 py-4 font-mono font-semibold text-amber-300">₹{r.potential_compensation_inr}</td>
-                          <td className="px-6 py-4">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              r.priority === 'high' ? 'bg-rose-900/60 text-rose-200' : (r.priority === 'medium' ? 'bg-amber-900/60 text-amber-200' : 'bg-slate-800 text-slate-300')
-                            }`}>
-                              {r.priority.toUpperCase()}
-                            </span>
-                          </td>
                           <td className="px-6 py-4 text-right">
                             <button
                               onClick={() => setExpandedRow(expandedRow === r.complaint_id ? null : r.complaint_id)}
                               className="text-indigo-400 hover:text-indigo-300 font-medium inline-flex items-center space-x-1"
                             >
-                              <span>{expandedRow === r.complaint_id ? "Hide Details" : "Inspect"}</span>
+                              <span>{expandedRow === r.complaint_id ? "Hide" : "Inspect"}</span>
                               {expandedRow === r.complaint_id ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                             </button>
                           </td>
