@@ -541,7 +541,7 @@ app.post("/api/actions/:action_id/approve", approveLimiter, async (req, res) => 
     });
   }
 
-  // Recipient Verification against data/banks.json or confirmed custom address
+  // Recipient Verification strictly against data/banks.json
   const recipient = (req.body?.recipient?.trim() || foundAction.payload?.recipient || "").trim();
   if (!recipient) {
     return res.status(400).json({ error: { code: "MISSING_RECIPIENT", message: "Recipient address is required." } });
@@ -555,14 +555,12 @@ app.post("/api/actions/:action_id/approve", approveLimiter, async (req, res) => 
   }
 
   const isKnownBankEmail = knownEmails.has(recipient.toLowerCase());
-  const confirmedCustom = req.body?.confirm_custom_recipient === true || req.body?.confirmed_custom_recipient === true;
 
-  if (!isKnownBankEmail && !confirmedCustom) {
+  if (!isKnownBankEmail) {
     return res.status(400).json({
       error: {
-        code: "UNCONFIRMED_CUSTOM_RECIPIENT",
-        message: `Recipient address '${recipient}' is not a verified bank grievance address from the official directory. Please confirm that you intend to send to this custom address.`,
-        requires_confirmation: true,
+        code: "INVALID_RECIPIENT",
+        message: `Recipient address '${recipient}' is not allowed. Only verified bank grievance recipients from data/banks.json are permitted.`,
         recipient
       }
     });

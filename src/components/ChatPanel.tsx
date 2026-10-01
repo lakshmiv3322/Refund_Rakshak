@@ -219,21 +219,51 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
       )}
 
-      {/* Quick Suggestions Pills */}
-      {messages.length <= 2 && (
-        <div className="px-4 py-2 border-t border-slate-200/60 dark:border-slate-800 flex items-center space-x-2 overflow-x-auto no-scrollbar">
-          <span className="text-[10px] text-slate-400 whitespace-nowrap font-medium">Try:</span>
-          {suggestions.map((s, idx) => (
-            <button
-              key={idx}
-              onClick={() => onSelectSuggestion && onSelectSuggestion(s)}
-              className="text-[10px] text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 px-2.5 py-1 rounded-full whitespace-nowrap transition"
-            >
-              {s.slice(0, 38)}...
-            </button>
-          ))}
-        </div>
-      )}
+      {/* One-Click Demo Buttons (Always Available for Instant Testing) */}
+      <div className="px-4 py-2 bg-slate-50/90 dark:bg-slate-950/80 border-t border-slate-200 dark:border-slate-800 flex items-center space-x-2 overflow-x-auto no-scrollbar">
+        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap flex items-center space-x-1">
+          <Sparkles className="w-3 h-3 text-blue-600" />
+          <span>Demo:</span>
+        </span>
+        <button
+          type="button"
+          onClick={() =>
+            onSelectSuggestion &&
+            onSelectSuggestion(
+              "My UPI payment of ₹2,400 to friend failed on 2026-09-22, money debited from SBI. Reference: UTR9988112233."
+            )
+          }
+          className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-blue-100 dark:bg-blue-950/90 text-blue-800 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900 border border-blue-300 dark:border-blue-800 whitespace-nowrap transition flex items-center space-x-1 shadow-sm"
+        >
+          <span>Failed UPI</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() =>
+            onSelectSuggestion &&
+            onSelectSuggestion(
+              "I did not make this transaction! Someone hacked my mobile device and transferred ₹15,000 without my authorization."
+            )
+          }
+          className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-100 dark:bg-rose-950/90 text-rose-800 dark:text-rose-300 hover:bg-rose-200 dark:hover:bg-rose-900 border border-rose-300 dark:border-rose-800 whitespace-nowrap transition flex items-center space-x-1 shadow-sm"
+        >
+          <span>Fraud</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() =>
+            onSelectSuggestion &&
+            onSelectSuggestion(
+              "I cancelled a Swiggy food order of ₹850 on 2026-09-25. The merchant says refunded but the amount is not in my bank."
+            )
+          }
+          className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-100 dark:bg-amber-950/90 text-amber-800 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900 border border-amber-300 dark:border-amber-800 whitespace-nowrap transition flex items-center space-x-1 shadow-sm"
+        >
+          <span>Merchant refund</span>
+        </button>
+      </div>
 
       {/* Input Bar */}
       <form

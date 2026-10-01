@@ -626,58 +626,98 @@ export default function App() {
         {currentView === "workspace" && (
           <div className="space-y-6">
             {/* Case Quick Bar */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center space-x-3">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Active Case:
-                </span>
-                <span className="font-mono font-bold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950 px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-900 text-xs">
-                  {caseId}
-                </span>
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center space-x-3">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    ACTIVE CASE:
+                  </span>
+                  <span className="font-mono font-bold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950 px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-900 text-xs">
+                    {caseId}
+                  </span>
 
-                {casesList.length > 1 && (
-                  <select
-                    value={caseId}
-                    onChange={(e) => loadCase(e.target.value)}
-                    className="text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-slate-700 dark:text-slate-300"
+                  {casesList.length > 1 && (
+                    <select
+                      value={caseId}
+                      onChange={(e) => loadCase(e.target.value)}
+                      className="text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-slate-700 dark:text-slate-300"
+                    >
+                      {casesList.map((c) => (
+                        <option key={c.case_id} value={c.case_id}>
+                          {c.case_id} (₹{c.transaction_facts?.amount ?? "—"})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={handleCreateNewCase}
+                    className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-semibold flex items-center space-x-1.5 transition"
                   >
-                    {casesList.map((c) => (
-                      <option key={c.case_id} value={c.case_id}>
-                        {c.case_id} (₹{c.transaction_facts?.amount ?? "—"})
-                      </option>
-                    ))}
-                  </select>
-                )}
+                    <PlusCircle className="w-3.5 h-3.5" />
+                    <span>New Case</span>
+                  </button>
+
+                  <button
+                    onClick={handleResetDemo}
+                    title="Reset Demo Case RR-DEMO-001"
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-semibold flex items-center space-x-1.5 transition"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset Demo</span>
+                  </button>
+
+                  <a
+                    href={`/api/cases/${caseId}/evidence-pack`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold flex items-center space-x-1.5 transition"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Evidence PDF</span>
+                  </a>
+                </div>
               </div>
 
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={handleCreateNewCase}
-                  className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-semibold flex items-center space-x-1.5 transition"
-                >
-                  <PlusCircle className="w-3.5 h-3.5" />
-                  <span>New Case</span>
-                </button>
+              {/* One-Line Summary under ACTIVE CASE */}
+              {(() => {
+                const facts = caseState?.transaction_facts || {};
+                const amountDisplay = facts.amount !== null && facts.amount !== undefined ? `₹${facts.amount}` : "Pending";
+                const bankDisplay = facts.bank_or_provider || "Pending";
+                const statusDisplay = caseState?.complaint_status ? caseState.complaint_status.replace(/_/g, " ") : (caseState?.escalation_stage || "Intake");
 
-                <button
-                  onClick={handleResetDemo}
-                  title="Reset Demo Case RR-DEMO-001"
-                  className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-semibold flex items-center space-x-1.5 transition"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Reset Demo</span>
-                </button>
+                let caseDaysDelayed = 0;
+                let caseCompensation = caseState?.latest_compensation_estimate || 0;
+                if (facts.transaction_date && caseState?.classification !== "unauthorized_or_fraud" && caseState?.branch !== "fraud_safety_branch") {
+                  const txDate = new Date(facts.transaction_date);
+                  const now = new Date(caseState?.simulated_now || new Date());
+                  const elapsedDays = Math.max(0, Math.floor((now.getTime() - txDate.getTime()) / (1000 * 60 * 60 * 24)));
+                  const tatDays = caseState?.scenario_id === "upi_p2m_merchant_debit_failed" ? 5 : 1;
+                  caseDaysDelayed = Math.max(0, elapsedDays - tatDays);
+                  if (!caseCompensation && caseDaysDelayed > 0) {
+                    caseCompensation = caseDaysDelayed * 100;
+                  }
+                }
 
-                <a
-                  href={`/api/cases/${caseId}/evidence-pack`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold flex items-center space-x-1.5 transition"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Evidence PDF</span>
-                </a>
-              </div>
+                return (
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                    <span><strong className="text-slate-500 font-medium">Amount:</strong> <span className="font-semibold text-emerald-600 dark:text-emerald-400">{amountDisplay}</span></span>
+                    <span className="text-slate-300 dark:text-slate-700">•</span>
+                    <span><strong className="text-slate-500 font-medium">Bank:</strong> <span className="font-semibold">{bankDisplay}</span></span>
+                    <span className="text-slate-300 dark:text-slate-700">•</span>
+                    <span><strong className="text-slate-500 font-medium">Status:</strong> <span className="font-semibold capitalize">{statusDisplay}</span></span>
+                    <span className="text-slate-300 dark:text-slate-700">•</span>
+                    <span><strong className="text-slate-500 font-medium">Days Delayed:</strong> <span className="font-semibold">{caseDaysDelayed}d</span></span>
+                    <span className="text-slate-300 dark:text-slate-700">•</span>
+                    <span><strong className="text-slate-500 font-medium">Potential Comp:</strong> <span className="font-bold text-emerald-600 dark:text-emerald-400">₹{caseCompensation}</span></span>
+                    <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium sm:ml-auto">
+                      Potential compensation estimate, subject to verification.
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Main Copilot Grid */}
