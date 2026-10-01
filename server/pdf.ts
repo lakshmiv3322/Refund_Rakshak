@@ -1,5 +1,5 @@
 import PDFDocument from "pdfkit";
-import { CaseState } from "./store.ts";
+import type { CaseState } from "./store.ts";
 
 export function generateEvidencePdf(caseState: CaseState, res: any) {
   const doc = new PDFDocument({ margin: 50 });

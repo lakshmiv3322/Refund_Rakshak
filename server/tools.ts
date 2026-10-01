@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { FunctionDeclaration, Type } from "@google/genai";
-import { CaseState, loadDb, saveDb } from "./store.ts";
+import { type FunctionDeclaration, Type } from "@google/genai";
+import { type CaseState, loadDb, saveDb } from "./store.ts";
 import { loadVerifiedRules, calculateTATDeadlineAndCompensation } from "./rules-engine.ts";
 import { findBankContact, loadBankContacts } from "./email.ts";
 

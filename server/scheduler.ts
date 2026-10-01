@@ -1,4 +1,4 @@
-import { loadDb, saveDb, CaseState } from "./store.ts";
+import { loadDb, saveDb, type CaseState } from "./store.ts";
 import { calculateTATDeadlineAndCompensation } from "./rules-engine.ts";
 import { sendUserDueFollowupNotification } from "./email.ts";
 

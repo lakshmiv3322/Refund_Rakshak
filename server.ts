@@ -17,7 +17,7 @@ import {
   generatePlaintextToken,
   hashToken,
   sanitizeCase,
-  CaseState
+  type CaseState
 } from "./server/store.ts";
 import { runAgent } from "./server/agent.ts";
 import { generateEvidencePdf } from "./server/pdf.ts";

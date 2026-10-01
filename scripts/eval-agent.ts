@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import assert from "assert";
 import { runAgent } from "../server/agent.ts";
-import { CaseState } from "../server/store.ts";
+import type { CaseState } from "../server/store.ts";
 
 dotenv.config();
 

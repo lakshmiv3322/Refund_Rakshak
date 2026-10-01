@@ -1,16 +1,18 @@
 import { GoogleGenAI } from "@google/genai";
-import { CaseState } from "./store.ts";
+import type { CaseState } from "./store.ts";
 import { toolDeclarations, executeToolCall, redactSecrets } from "./tools.ts";
 
-const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
-const ai = new GoogleGenAI({
-  apiKey,
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build"
+function getGenAI() {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+  return new GoogleGenAI({
+    apiKey: apiKey || undefined,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build"
+      }
     }
-  }
-});
+  });
+}
 
 export interface RunAgentOptions {
   onStep?: (step: { tool: string; args: any; result: any; status?: string }) => void;
@@ -29,7 +31,7 @@ export async function runAgent(
   pending_question?: string;
   approval_request?: any;
 }> {
-  const primaryModel = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+  const primaryModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
   const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.1-flash-lite";
 
   // Redact secrets BEFORE storing or sending to the model
@@ -80,12 +82,14 @@ You are not a lawyer and cannot guarantee refunds.
 CURRENT CASE SNAPSHOT:
 ${JSON.stringify(caseSnapshot, null, 2)}`;
 
+  const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
     return {
       message: "RefundRakshak agent is unavailable: GEMINI_API_KEY is not configured.",
       status: "agent_unavailable"
     };
   }
+  const ai = getGenAI();
 
   // Format chat contents for Gemini
   const contents: any[] = caseState.chat_history.map(turn => ({
