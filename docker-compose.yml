@@ -2,16 +2,31 @@ version: "3.8"
 
 services:
   refundrakshak:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
       - PORT=8000
       - NODE_ENV=production
+      - DATA_DIR=/app/data
+      - RULES_PATH=/app/data/verified_rules.json
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      - GEMINI_FALLBACK_MODEL=${GEMINI_FALLBACK_MODEL:-gemini-3.1-flash-lite}
+      - ENABLE_SIM_TIME=${ENABLE_SIM_TIME:-false}
+      - SEED_DEMO=${SEED_DEMO:-false}
+      - DEV_OPEN_ACCESS=${DEV_OPEN_ACCESS:-false}
+    volumes:
+      - refundrakshak_data:/app/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:8000/api/health').then(r => r.ok ? process.exit(0) : process.exit(1))"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
+      start_period: 10s
+
+volumes:
+  refundrakshak_data:

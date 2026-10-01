@@ -8,7 +8,7 @@
       "nodal_officer_email": "nodalofficer@sbi.co.in",
       "escalation_portal_url": "https://crcf.sbi.co.in/ccf/",
       "source_url": "https://sbi.co.in/web/customer-care/grievance-redressal-mechanism",
-      "verified_at": "2026-02-15"
+      "verified_at": "2026-03-30"
     },
     {
       "bank_id": "hdfc",
@@ -18,27 +18,27 @@
       "nodal_officer_email": "pno@hdfcbank.com",
       "escalation_portal_url": "https://www.hdfcbank.com/personal/need-help/grievance-redressal-digital",
       "source_url": "https://www.hdfcbank.com/personal/need-help/grievance-redressal-digital",
-      "verified_at": "2026-02-15"
+      "verified_at": "2026-03-30"
     },
     {
       "bank_id": "icici",
       "name": "ICICI Bank",
       "aliases": ["icici", "icici bank", "icici bank ltd"],
-      "grievance_email": "customer.care@icicibank.com",
-      "nodal_officer_email": "headservicequality@icicibank.com",
+      "grievance_email": "headservicequality@icicibank.com",
+      "nodal_officer_email": "pno@icicibank.com",
       "escalation_portal_url": "https://www.icicibank.com/complaints/complaints",
       "source_url": "https://www.icicibank.com/notice-board/grievance-redressal",
-      "verified_at": "2026-02-15"
+      "verified_at": "2026-03-30"
     },
     {
       "bank_id": "axis",
       "name": "Axis Bank",
       "aliases": ["axis", "axis bank", "axis bank ltd"],
-      "grievance_email": "grievance.officer@axisbank.com",
-      "nodal_officer_email": "nodal.officer@axisbank.com",
+      "grievance_email": "nodal.officer@axisbank.com",
+      "nodal_officer_email": "pno@axisbank.com",
       "escalation_portal_url": "https://www.axisbank.com/support",
       "source_url": "https://www.axisbank.com/support/grievance-redressal",
-      "verified_at": "2026-02-15"
+      "verified_at": "2026-03-30"
     },
     {
       "bank_id": "kotak",
@@ -48,7 +48,7 @@
       "nodal_officer_email": "nodalofficer@kotak.com",
       "escalation_portal_url": "https://www.kotak.com/en/customer-care/grievance-redressal.html",
       "source_url": "https://www.kotak.com/en/customer-care/grievance-redressal.html",
-      "verified_at": "2026-02-15"
+      "verified_at": "2026-03-30"
     },
     {
       "bank_id": "pnb",
@@ -58,7 +58,7 @@
       "nodal_officer_email": "pno@pnb.co.in",
       "escalation_portal_url": "https://www.pnbindia.in/Grievance-Redressal.html",
       "source_url": "https://www.pnbindia.in/Grievance-Redressal.html",
-      "verified_at": "2026-02-15"
+      "verified_at": "2026-03-30"
     },
     {
       "bank_id": "bob",
@@ -68,17 +68,7 @@
       "nodal_officer_email": "pno@bankofbaroda.com",
       "escalation_portal_url": "https://www.bankofbaroda.in/grievance-redressal",
       "source_url": "https://www.bankofbaroda.in/grievance-redressal",
-      "verified_at": "2026-02-15"
-    },
-    {
-      "bank_id": "npci",
-      "name": "National Payments Corporation of India (UPI Dispute)",
-      "aliases": ["npci", "upi", "bhim"],
-      "grievance_email": "dispute.resolution@npci.org.in",
-      "nodal_officer_email": "nodal.officer@npci.org.in",
-      "escalation_portal_url": "https://www.npci.org.in/what-we-do/upi/dispute-redressal-mechanism",
-      "source_url": "https://www.npci.org.in/what-we-do/upi/dispute-redressal-mechanism",
-      "verified_at": "2026-02-15"
+      "verified_at": "2026-03-30"
     }
   ]
 }

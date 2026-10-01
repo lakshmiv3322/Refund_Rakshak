@@ -4,13 +4,27 @@ import helmet from "helmet";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import rateLimit from "express-rate-limit";
 import Papa from "papaparse";
-import { loadDb, saveDb, createDemoCaseState, CaseState } from "./server/store.ts";
+import {
+  loadDb,
+  saveDb,
+  getCaseById,
+  saveCaseState,
+  listCasesForToken,
+  listAllCases,
+  createDemoCaseState,
+  generatePlaintextToken,
+  hashToken,
+  sanitizeCase,
+  CaseState
+} from "./server/store.ts";
 import { runAgent } from "./server/agent.ts";
 import { generateEvidencePdf } from "./server/pdf.ts";
-import { loadVerifiedRules, calculateTATDeadlineAndCompensation } from "./server/rules-engine.ts";
-import { sendEmailOrFallback, findBankContact } from "./server/email.ts";
+import { loadVerifiedRules } from "./server/rules-engine.ts";
+import { sendEmailOrFallback } from "./server/email.ts";
 import { startBackgroundScheduler, checkAndExecuteDueFollowups } from "./server/scheduler.ts";
+import { triageComplaintUnified } from "./server/b2b.ts";
 
 dotenv.config();
 
@@ -18,30 +32,68 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(helmet({ contentSecurityPolicy: false })); // allow dev scripts
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// CORS configuration
-const corsOrigin = process.env.CORS_ORIGIN || "*";
-app.use(cors({ origin: corsOrigin }));
+// 1. CORS allow-list configuration
+const isProd = process.env.NODE_ENV === "production";
+const corsOriginsRaw = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || "";
+const allowedOrigins = corsOriginsRaw
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
 
-// Rate limiter: 60 req/min per IP
-const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-app.use((req, res, next) => {
-  const ip = req.ip || req.socket.remoteAddress || "unknown";
-  const now = Date.now();
-  let record = rateLimitMap.get(ip);
-  if (!record || now > record.resetTime) {
-    record = { count: 1, resetTime: now + 60000 };
-    rateLimitMap.set(ip, record);
-  } else {
-    record.count++;
-    if (record.count > 60) {
-      return res.status(429).json({ error: { code: "RATE_LIMIT_EXCEEDED", message: "Maximum 60 requests per minute allowed." } });
-    }
-  }
-  next();
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (such as mobile apps, curl, server-to-server, or same-origin)
+      if (!origin) return callback(null, true);
+
+      // Explicitly allowed origins or wildcard
+      if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // Allow AI Studio preview/dev subdomains (*.run.app), google domains, and localhost
+      if (
+        origin.endsWith(".run.app") ||
+        origin.endsWith(".google.com") ||
+        origin.includes("localhost") ||
+        origin.includes("127.0.0.1")
+      ) {
+        return callback(null, true);
+      }
+
+      // If in production and custom strict origins are specified without matches
+      if (isProd && allowedOrigins.length > 0) {
+        return callback(new Error(`Origin ${origin} not permitted by CORS policy.`));
+      }
+
+      // Default allow for dev/preview
+      return callback(null, true);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-case-token"]
+  })
+);
+
+// 2. Rate limiters
+const agentRunLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30, // 30 requests per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many agent requests. Please slow down." } }
+});
+
+const approveLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20, // 20 actions per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many approval requests. Please slow down." } }
 });
 
 // Load verified statutory rules on startup
@@ -53,7 +105,7 @@ try {
   process.exit(1);
 }
 
-// Start background SLA scheduler
+// Start background SLA scheduler (fires on real clock)
 startBackgroundScheduler(60000);
 
 // API Health Check
@@ -66,19 +118,47 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Auth helper: verify session or case ownership
-function verifyCaseAccess(req: express.Request, caseState: CaseState): boolean {
-  if (process.env.NODE_ENV !== "production") return true;
-  const token = req.headers.authorization?.replace(/^Bearer\s+/i, "") || req.headers["x-case-token"];
-  if (!token) return true; // allow unauthenticated in demo mode
-  return !caseState.auth_token || caseState.auth_token === token;
+// Helper: extract auth token from request
+function extractToken(req: express.Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.toLowerCase().startsWith("bearer ")) {
+    return authHeader.slice(7).trim();
+  }
+  const customHeader = req.headers["x-case-token"];
+  if (typeof customHeader === "string" && customHeader.trim()) {
+    return customHeader.trim();
+  }
+  return null;
 }
 
-// Create new grievance case
+// Helper: verify case ownership token
+function verifyCaseAccess(req: express.Request, caseState: CaseState): { allowed: boolean; reason?: string } {
+  if (process.env.DEV_OPEN_ACCESS === "true") {
+    return { allowed: true };
+  }
+
+  const token = extractToken(req);
+  if (!token) {
+    return { allowed: false, reason: "UNAUTHORIZED" };
+  }
+
+  if (!caseState.token_hash) {
+    return { allowed: false, reason: "FORBIDDEN" };
+  }
+
+  const hashed = hashToken(token);
+  if (hashed !== caseState.token_hash) {
+    return { allowed: false, reason: "FORBIDDEN" };
+  }
+
+  return { allowed: true };
+}
+
+// Create new grievance case: returns plaintext token only ONCE
 app.post("/api/cases", (req, res) => {
-  const db = loadDb();
   const caseId = "RR-" + Math.floor(100000 + Math.random() * 900000);
-  const authToken = "tk_" + Math.random().toString(36).substring(2, 15);
+  const plaintextToken = generatePlaintextToken();
+  const tokenHash = hashToken(plaintextToken);
 
   const newCase: CaseState = {
     case_id: caseId,
@@ -86,7 +166,7 @@ app.post("/api/cases", (req, res) => {
     updated_at: new Date().toISOString(),
     user_language: req.body.language || "en",
     user_profile: req.body.user_profile || { name: "User", email: "user@example.com" },
-    auth_token: authToken,
+    token_hash: tokenHash,
     transaction_facts: {
       amount: null,
       currency: "INR",
@@ -120,58 +200,121 @@ app.post("/api/cases", (req, res) => {
     safety_flags: []
   };
 
-  db.cases[caseId] = newCase;
-  saveDb(db);
+  saveCaseState(newCase);
 
-  res.status(201).json(newCase);
+  // Return the plaintext token ONLY ONCE at creation
+  res.status(201).json({
+    ...sanitizeCase(newCase),
+    token: plaintextToken
+  });
 });
 
+// List cases: does NOT return other users' cases or token hashes
 app.get("/api/cases", (req, res) => {
-  const db = loadDb();
-  res.json(Object.values(db.cases));
+  if (process.env.DEV_OPEN_ACCESS === "true") {
+    const all = listAllCases().map(sanitizeCase);
+    return res.json(all);
+  }
+
+  const token = extractToken(req);
+  if (!token) {
+    return res.status(401).json({
+      error: { code: "UNAUTHORIZED", message: "Authorization token required to list cases." }
+    });
+  }
+
+  const tokenHash = hashToken(token);
+  const userCases = listCasesForToken(tokenHash).map(sanitizeCase);
+  res.json(userCases);
 });
 
+// Get case details
 app.get("/api/cases/:case_id", (req, res) => {
-  const db = loadDb();
-  const c = db.cases[req.params.case_id];
+  const caseId = req.params.case_id;
+  const c = getCaseById(caseId);
   if (!c) {
-    return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: `Case ${req.params.case_id} not found.` } });
+    return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: `Case ${caseId} not found.` } });
   }
-  if (!verifyCaseAccess(req, c)) {
-    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access token invalid for this case." } });
+
+  const access = verifyCaseAccess(req, c);
+  if (!access.allowed) {
+    if (access.reason === "UNAUTHORIZED") {
+      return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Case authorization token required." } });
+    }
+    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access denied for this case." } });
   }
-  res.json(c);
+
+  res.json(sanitizeCase(c));
 });
 
-// Demo reset endpoint (for judges and hackathon evaluators)
+// Demo seed reset endpoint (only enabled if SEED_DEMO=true or DEV_OPEN_ACCESS=true)
 app.post("/api/cases/RR-DEMO-001/reset", (req, res) => {
-  const db = loadDb();
+  if (process.env.SEED_DEMO !== "true" && process.env.DEV_OPEN_ACCESS !== "true") {
+    return res.status(403).json({
+      error: { code: "FORBIDDEN", message: "Demo reset is disabled in production without SEED_DEMO=true." }
+    });
+  }
+
   const demo = createDemoCaseState();
-  db.cases["RR-DEMO-001"] = demo;
-  saveDb(db);
-  res.json({ status: "success", message: "Demo seed case RR-DEMO-001 reset.", case_state: demo });
+  saveCaseState(demo);
+  res.json({
+    status: "success",
+    message: "Demo seed case RR-DEMO-001 reset.",
+    case_state: sanitizeCase(demo),
+    token: "demo-token-rr-001"
+  });
 });
 
-// Agent execution endpoint (Supports standard JSON and live SSE streaming)
-app.post("/api/agent/run", async (req, res) => {
+// Run agent endpoint (Supports standard JSON and live SSE streaming, with rate limiting and image validation)
+app.post("/api/agent/run", agentRunLimiter, async (req, res) => {
   try {
     const { case_id, message, language, simulated_now, image_base64, image_mime } = req.body;
     const isStream = req.headers.accept?.includes("text/event-stream") || req.query.stream === "true";
 
-    const db = loadDb();
-    let c: CaseState;
+    // 3. Validate image upload if present (jpeg/png only, max 5 MB)
+    if (image_base64) {
+      const allowedMimes = ["image/jpeg", "image/png", "image/jpg"];
+      if (!image_mime || !allowedMimes.includes(image_mime.toLowerCase())) {
+        return res.status(400).json({
+          error: { code: "INVALID_IMAGE_TYPE", message: "Only PNG and JPEG images are supported." }
+        });
+      }
+      const approxSizeBytes = Math.ceil((image_base64.length * 3) / 4);
+      if (approxSizeBytes > 5 * 1024 * 1024) {
+        return res.status(400).json({
+          error: { code: "IMAGE_TOO_LARGE", message: "Image exceeds maximum allowed size of 5 MB." }
+        });
+      }
+    }
 
-    if (case_id && db.cases[case_id]) {
-      c = db.cases[case_id];
+    let c: CaseState;
+    let generatedToken: string | undefined;
+
+    if (case_id) {
+      const existing = getCaseById(case_id);
+      if (existing) {
+        const access = verifyCaseAccess(req, existing);
+        if (!access.allowed) {
+          if (access.reason === "UNAUTHORIZED") {
+            return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Case authorization token required." } });
+          }
+          return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access denied for this case." } });
+        }
+        c = existing;
+      } else {
+        return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: `Case ${case_id} not found.` } });
+      }
     } else {
-      const newId = case_id || "RR-" + Math.floor(100000 + Math.random() * 900000);
+      // Create new case if none specified
+      const newId = "RR-" + Math.floor(100000 + Math.random() * 900000);
+      generatedToken = generatePlaintextToken();
       c = {
         case_id: newId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         user_language: language || "en",
         user_profile: { name: "User", email: "user@example.com" },
-        auth_token: "tk_" + Math.random().toString(36).substring(2, 15),
+        token_hash: hashToken(generatedToken),
         transaction_facts: {
           amount: null,
           currency: "INR",
@@ -204,41 +347,42 @@ app.post("/api/agent/run", async (req, res) => {
         source_references: [],
         safety_flags: []
       };
-      db.cases[newId] = c;
+      saveCaseState(c);
     }
 
     if (simulated_now) c.simulated_now = simulated_now;
     if (language) c.user_language = language;
 
     if (isStream) {
-      // Set headers for Server-Sent Events
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
       const agentResult = await runAgent(c, message || "", image_base64, image_mime, {
-        onStep: (step) => {
+        onStep: step => {
           res.write(`event: step\ndata: ${JSON.stringify(step)}\n\n`);
         },
-        onToken: (token) => {
+        onToken: token => {
           res.write(`event: token\ndata: ${JSON.stringify({ token })}\n\n`);
         }
       });
 
       c.updated_at = new Date().toISOString();
-      db.cases[c.case_id] = c;
-      saveDb(db);
+      saveCaseState(c);
 
-      res.write(`event: done\ndata: ${JSON.stringify({
-        case_id: c.case_id,
-        message: agentResult.message,
-        status: agentResult.status,
-        pending_question: agentResult.pending_question,
-        approval_request: agentResult.approval_request,
-        actions: c.pending_actions,
-        case_state: c,
-        trace: c.trace
-      })}\n\n`);
+      res.write(
+        `event: done\ndata: ${JSON.stringify({
+          case_id: c.case_id,
+          token: generatedToken,
+          message: agentResult.message,
+          status: agentResult.status,
+          pending_question: agentResult.pending_question,
+          approval_request: agentResult.approval_request,
+          actions: c.pending_actions,
+          case_state: sanitizeCase(c),
+          trace: c.trace
+        })}\n\n`
+      );
       res.end();
       return;
     }
@@ -246,18 +390,18 @@ app.post("/api/agent/run", async (req, res) => {
     // Standard JSON Response
     const agentResult = await runAgent(c, message || "", image_base64, image_mime);
     c.updated_at = new Date().toISOString();
-    db.cases[c.case_id] = c;
-    saveDb(db);
+    saveCaseState(c);
 
     res.json({
       case_id: c.case_id,
+      token: generatedToken,
       message: agentResult.message,
       language: c.user_language,
       status: agentResult.status,
       pending_question: agentResult.pending_question,
       approval_request: agentResult.approval_request,
       actions: c.pending_actions,
-      case_state: c,
+      case_state: sanitizeCase(c),
       trace: c.trace,
       sources: c.source_references
     });
@@ -267,25 +411,33 @@ app.post("/api/agent/run", async (req, res) => {
   }
 });
 
-// Advance clock (dev / evaluation tool)
+// Advance clock (dev / evaluation tool only, requires ENABLE_SIM_TIME=true)
 app.post("/api/cases/:case_id/simulate-time", async (req, res) => {
   try {
-    const { days } = req.body;
-    const caseId = req.params.case_id;
-    const db = loadDb();
-    let c = db.cases[caseId];
-
-    if (!c) {
-      if (caseId === "RR-DEMO-001" || Object.keys(db.cases).length === 0) {
-        c = createDemoCaseState();
-        c.case_id = caseId;
-        db.cases[caseId] = c;
-        saveDb(db);
-      } else {
-        return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: `Case ${caseId} not found.` } });
-      }
+    if (process.env.ENABLE_SIM_TIME !== "true") {
+      return res.status(403).json({
+        error: {
+          code: "SIMULATION_DISABLED",
+          message: "Simulation time advance is disabled in this environment. Set ENABLE_SIM_TIME=true in development to enable."
+        }
+      });
     }
 
+    const caseId = req.params.case_id;
+    const c = getCaseById(caseId);
+    if (!c) {
+      return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: `Case ${caseId} not found.` } });
+    }
+
+    const access = verifyCaseAccess(req, c);
+    if (!access.allowed) {
+      if (access.reason === "UNAUTHORIZED") {
+        return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Case authorization token required." } });
+      }
+      return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access denied for this case." } });
+    }
+
+    const { days } = req.body;
     const daysToAdd = days || 7;
     const currentSimDate = new Date(c.simulated_now || new Date());
     currentSimDate.setDate(currentSimDate.getDate() + daysToAdd);
@@ -299,8 +451,7 @@ app.post("/api/cases/:case_id/simulate-time", async (req, res) => {
     // Check due follow-ups against updated simulated clock
     checkAndExecuteDueFollowups(c.simulated_now);
 
-    const refreshedDb = loadDb();
-    const refreshedCase = refreshedDb.cases[caseId] || c;
+    const refreshedCase = getCaseById(caseId) || c;
 
     res.json({
       case_id: refreshedCase.case_id,
@@ -308,15 +459,15 @@ app.post("/api/cases/:case_id/simulate-time", async (req, res) => {
       due_followups: refreshedCase.followups,
       new_actions: refreshedCase.pending_actions,
       trace: refreshedCase.trace,
-      case_state: refreshedCase
+      case_state: sanitizeCase(refreshedCase)
     });
   } catch (err: any) {
     res.status(500).json({ error: { code: "SIMULATION_ERROR", message: err.message || "Simulation error" } });
   }
 });
 
-// Human Approval Endpoint (Real Email Sending with Mailto Fallback)
-app.post("/api/actions/:action_id/approve", async (req, res) => {
+// Human Approval Endpoint (Rate limited, authenticated, real dispatch with mailto fallback)
+app.post("/api/actions/:action_id/approve", approveLimiter, async (req, res) => {
   const actionId = req.params.action_id;
   const db = loadDb();
   let foundAction: any = null;
@@ -335,13 +486,25 @@ app.post("/api/actions/:action_id/approve", async (req, res) => {
     return res.status(404).json({ error: { code: "ACTION_NOT_FOUND", message: "Action not found" } });
   }
 
+  const access = verifyCaseAccess(req, foundCase);
+  if (!access.allowed) {
+    if (access.reason === "UNAUTHORIZED") {
+      return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Case authorization token required." } });
+    }
+    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access denied for this case." } });
+  }
+
   // Idempotency: return existing result if already executed
   if (foundAction.status === "sent" || foundAction.status === "approved_and_executed") {
-    return res.json({ status: "success", action: foundAction, case_state: foundCase });
+    return res.json({ status: "success", action: foundAction, case_state: sanitizeCase(foundCase) });
   }
 
   // Real Email Dispatch
-  const recipient = foundAction.payload?.recipient || "customercare@bank.co.in";
+  const recipient = req.body?.recipient?.trim() || foundAction.payload?.recipient || "customercare@bank.co.in";
+  if (req.body?.recipient) {
+    if (!foundAction.payload) foundAction.payload = {};
+    foundAction.payload.recipient = recipient;
+  }
   const subject = foundAction.payload?.subject || "Grievance Redressal Request";
   const body = foundAction.payload?.body || "Please process resolution.";
 
@@ -389,59 +552,81 @@ app.post("/api/actions/:action_id/approve", async (req, res) => {
   });
 
   foundCase.updated_at = new Date().toISOString();
-  saveDb(db);
+  saveCaseState(foundCase);
 
   res.json({
     status: "success",
     action: foundAction,
     delivery_details: foundAction.delivery_details,
-    case_state: foundCase
+    case_state: sanitizeCase(foundCase)
   });
 });
 
-app.post("/api/actions/:action_id/reject", (req, res) => {
+app.post("/api/actions/:action_id/reject", approveLimiter, (req, res) => {
   const actionId = req.params.action_id;
   const db = loadDb();
   let foundAction: any = null;
+  let foundCase: CaseState | null = null;
 
   for (const c of Object.values(db.cases)) {
     const act = c.pending_actions.find((a: any) => a.id === actionId);
     if (act) {
-      act.status = "rejected";
       foundAction = act;
-      c.trace.unshift({
-        id: "tr_rej_" + Math.random().toString(36).substring(2, 9),
-        timestamp: new Date().toISOString(),
-        event_type: "ACTION_REJECTED",
-        label: `User rejected action: ${act.type}`,
-        tool_name: "reject_action",
-        branch: c.branch,
-        status: "warning",
-        summary: `Action ${act.type} explicitly rejected by user.`,
-        source_ids: []
-      });
+      foundCase = c;
       break;
     }
   }
 
-  if (!foundAction) return res.status(404).json({ error: { code: "ACTION_NOT_FOUND", message: "Action not found" } });
-  saveDb(db);
+  if (!foundAction || !foundCase) {
+    return res.status(404).json({ error: { code: "ACTION_NOT_FOUND", message: "Action not found" } });
+  }
+
+  const access = verifyCaseAccess(req, foundCase);
+  if (!access.allowed) {
+    if (access.reason === "UNAUTHORIZED") {
+      return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Case authorization token required." } });
+    }
+    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access denied for this case." } });
+  }
+
+  foundAction.status = "rejected";
+  foundCase.trace.unshift({
+    id: "tr_rej_" + Math.random().toString(36).substring(2, 9),
+    timestamp: new Date().toISOString(),
+    event_type: "ACTION_REJECTED",
+    label: `User rejected action: ${foundAction.type}`,
+    tool_name: "reject_action",
+    branch: foundCase.branch,
+    status: "warning",
+    summary: `Action ${foundAction.type} explicitly rejected by user.`,
+    source_ids: []
+  });
+
+  foundCase.updated_at = new Date().toISOString();
+  saveCaseState(foundCase);
   res.json({ status: "success", action: foundAction });
 });
 
-// Evidence Pack PDF export
+// Evidence Pack PDF export (authenticated)
 app.get("/api/cases/:case_id/evidence-pack", (req, res) => {
-  const db = loadDb();
-  const c = db.cases[req.params.case_id];
+  const caseId = req.params.case_id;
+  const c = getCaseById(caseId);
   if (!c) {
     return res.status(404).json({ error: { code: "CASE_NOT_FOUND", message: "Case not found" } });
   }
+
+  const access = verifyCaseAccess(req, c);
+  if (!access.allowed) {
+    if (access.reason === "UNAUTHORIZED") {
+      return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Case authorization token required." } });
+    }
+    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Access denied for this case." } });
+  }
+
   generateEvidencePdf(c, res);
 });
 
-import { triageComplaintUnified } from "./server/b2b.ts";
-
-// B2B Batch Triage (with Papa.parse CSV parsing and row validation)
+// B2B Batch Triage
 app.post("/api/b2b/triage-batch", (req, res) => {
   try {
     let complaints: any[] = [];
@@ -571,7 +756,7 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
-const PORT = Number(process.env.PORT || 8000);
+const PORT = Number(process.env.PORT || 3000);
 if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`RefundRakshak production server listening on http://0.0.0.0:${PORT}`);

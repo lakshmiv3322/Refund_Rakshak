@@ -1,37 +1,33 @@
 # Stage 1: Build
-FROM node:20-slim AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 
-# Install build dependencies
-COPY package.json ./
+# Install native compilation dependencies for better-sqlite3 build
+RUN apk add --no-cache python3 make g++
+
+COPY package.json package-lock.json* ./
 RUN npm install --legacy-peer-deps
 
-# Copy application source
 COPY . .
-
-# Build client and server bundles
 RUN npm run build
 
 # Stage 2: Production Runner
-FROM node:20-slim AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
-# Install security updates
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+# Install runtime dependencies and curl for healthcheck
+RUN apk add --no-cache curl python3 make g++
 
 # Create non-root user and group
-RUN groupadd -g 1001 nodejs && \
-    useradd -u 1001 -g nodejs -s /bin/sh -m appuser
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S appuser -u 1001 -G nodejs
 
-# Copy package config and install production dependencies only
-COPY package.json ./
+COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --legacy-peer-deps && npm cache clean --force
 
-# Copy built assets and data templates
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/data ./data
 
-# Setup writable data directory for non-root user
 RUN mkdir -p /app/data && chown -R appuser:nodejs /app
 
 USER appuser
@@ -41,9 +37,10 @@ ENV NODE_ENV=production \
     DATA_DIR=/app/data \
     RULES_PATH=/app/data/verified_rules.json
 
+VOLUME ["/app/data"]
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://localhost:8000/api/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+  CMD curl -f http://localhost:8000/api/health || exit 1
 
 CMD ["node", "dist/server.js"]

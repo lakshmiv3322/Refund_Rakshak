@@ -18,7 +18,8 @@ let cachedBanks: BankContact[] = [];
 export function loadBankContacts(): BankContact[] {
   if (cachedBanks.length > 0) return cachedBanks;
   try {
-    const banksPath = path.join(process.cwd(), "data", "banks.json");
+    const dataDir = process.env.DATA_DIR || path.join(process.cwd(), "data");
+    const banksPath = path.join(dataDir, "banks.json");
     if (fs.existsSync(banksPath)) {
       const data = JSON.parse(fs.readFileSync(banksPath, "utf-8"));
       cachedBanks = data.banks || [];
@@ -139,3 +140,24 @@ export async function sendEmailOrFallback(params: SendEmailParams): Promise<Send
     copy_text: copyText
   };
 }
+
+export async function sendUserDueFollowupNotification(params: {
+  userEmail: string;
+  caseId: string;
+  followupId: string;
+  compensationEstimate?: number;
+}): Promise<SendEmailResult> {
+  const subject = `RefundRakshak Alert: Follow-up action ready for Case ${params.caseId}`;
+  const compInfo = params.compensationEstimate && params.compensationEstimate > 0
+    ? `Current potential compensation estimate (subject to verification): ₹${params.compensationEstimate}.\n`
+    : "";
+
+  const body = `Dear User,\n\nA statutory follow-up for your grievance case ${params.caseId} is now due.\n\n${compInfo}The 7-day recommended wait period following your initial bank complaint has elapsed without resolution. A draft escalation to the Principal Nodal Officer has been prepared.\n\nPlease log in to RefundRakshak to review the draft and provide explicit approval before it is sent.\n\nWarm regards,\nRefundRakshak Automated Dispute Redressal Copilot`;
+
+  return sendEmailOrFallback({
+    to: params.userEmail,
+    subject,
+    body
+  });
+}
+

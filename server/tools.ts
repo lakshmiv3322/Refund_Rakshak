@@ -570,6 +570,13 @@ export function executeToolCall(toolName: string, rawArgs: any, caseState: CaseS
       if (!parsed.success) return { result: { error: "Invalid stop_branch args" } };
       const { branch, reason, checklist } = parsed.data;
       caseState.branch = branch;
+      if (branch.includes("atm")) {
+        caseState.classification = "atm_or_card";
+      } else if (branch.includes("fraud")) {
+        caseState.classification = "unauthorized_or_fraud";
+      } else if (branch.includes("merchant")) {
+        caseState.classification = "merchant_refund";
+      }
       addToolTrace(`Stopped branch: ${branch}`, "warning", reason);
       return { result: { branch, reason, checklist }, stop: true, status: branch.includes("fraud") ? "safety_stop" : "out_of_scope" };
     }

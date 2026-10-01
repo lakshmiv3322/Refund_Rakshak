@@ -50,6 +50,37 @@ export default function App() {
   const [selectedImage, setSelectedImage] = useState<{ base64: string; mime: string; name: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Authentication & Access Control state
+  const [caseTokens, setCaseTokens] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("refundrakshak_tokens") || "{}");
+    } catch {
+      return {};
+    }
+  });
+  const [recipientEdits, setRecipientEdits] = useState<Record<string, string>>({});
+
+  const saveTokenForCase = (id: string, token: string) => {
+    setCaseTokens((prev) => {
+      const updated = { ...prev, [id]: token };
+      try {
+        localStorage.setItem("refundrakshak_tokens", JSON.stringify(updated));
+      } catch (_) {}
+      return updated;
+    });
+  };
+
+  const getAuthHeaders = (id?: string): Record<string, string> => {
+    const targetId = id || caseId;
+    const token = caseTokens[targetId];
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+      headers["x-case-token"] = token;
+    }
+    return headers;
+  };
+
   // B2B state
   const [b2bSummary, setB2bSummary] = useState<any>(null);
   const [b2bResults, setB2bResults] = useState<any[]>([]);
@@ -74,7 +105,9 @@ export default function App() {
 
   const fetchCasesList = async () => {
     try {
-      const res = await fetch("/api/cases");
+      const res = await fetch("/api/cases", {
+        headers: getAuthHeaders()
+      });
       const contentType = res.headers.get("content-type") || "";
       if (res.ok && contentType.includes("application/json")) {
         const list = await res.json();
@@ -95,7 +128,9 @@ export default function App() {
 
   const fetchCase = async (id: string) => {
     try {
-      const res = await fetch(`/api/cases/${id}`);
+      const res = await fetch(`/api/cases/${id}`, {
+        headers: getAuthHeaders(id)
+      });
       const contentType = res.headers.get("content-type") || "";
       if (res.ok && contentType.includes("application/json")) {
         const data = await res.json();
@@ -128,6 +163,9 @@ export default function App() {
       const contentType = res.headers.get("content-type") || "";
       if (res.ok && contentType.includes("application/json")) {
         const newCase = await res.json();
+        if (newCase.token) {
+          saveTokenForCase(newCase.case_id, newCase.token);
+        }
         setCaseId(newCase.case_id);
         setCaseState(newCase);
         setMessages([
@@ -146,10 +184,16 @@ export default function App() {
 
   const handleResetDemo = async () => {
     try {
-      const res = await fetch("/api/cases/RR-DEMO-001/reset", { method: "POST" });
+      const res = await fetch("/api/cases/RR-DEMO-001/reset", {
+        method: "POST",
+        headers: getAuthHeaders("RR-DEMO-001")
+      });
       const contentType = res.headers.get("content-type") || "";
       if (res.ok && contentType.includes("application/json")) {
         const data = await res.json();
+        if (data.token) {
+          saveTokenForCase("RR-DEMO-001", data.token);
+        }
         setCaseId("RR-DEMO-001");
         setCaseState(data.case_state);
         setMessages(data.case_state.chat_history.map((h: any) => ({
@@ -158,6 +202,8 @@ export default function App() {
         })));
         fetchCasesList();
         showToast("Demo case RR-DEMO-001 reset to verified seed state.", "success");
+      } else {
+        showToast("Demo reset unavailable without SEED_DEMO=true", "info");
       }
     } catch (e) {
       showToast("Error resetting demo case", "error");
@@ -208,7 +254,7 @@ export default function App() {
     try {
       const res = await fetch("/api/agent/run", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(caseId),
         body: JSON.stringify({
           case_id: caseId,
           message: userText,
@@ -231,6 +277,9 @@ export default function App() {
 
       if (contentType.includes("application/json")) {
         const data = await res.json();
+        if (data.token) {
+          saveTokenForCase(data.case_id, data.token);
+        }
         if (data.case_state) {
           setCaseState(data.case_state);
           setCaseId(data.case_id);
@@ -257,7 +306,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/cases/${caseId}/simulate-time`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(caseId),
         body: JSON.stringify({ days })
       });
       const contentType = res.headers.get("content-type") || "";
@@ -285,7 +334,12 @@ export default function App() {
 
   const handleApproveAction = async (actionId: string) => {
     try {
-      const res = await fetch(`/api/actions/${actionId}/approve`, { method: "POST" });
+      const customRecipient = recipientEdits[actionId];
+      const res = await fetch(`/api/actions/${actionId}/approve`, {
+        method: "POST",
+        headers: getAuthHeaders(caseId),
+        body: JSON.stringify({ recipient: customRecipient })
+      });
       const contentType = res.headers.get("content-type") || "";
       if (!res.ok) {
         let errMsg = "Approval failed";
@@ -313,13 +367,39 @@ export default function App() {
 
   const handleRejectAction = async (actionId: string) => {
     try {
-      const res = await fetch(`/api/actions/${actionId}/reject`, { method: "POST" });
+      const res = await fetch(`/api/actions/${actionId}/reject`, {
+        method: "POST",
+        headers: getAuthHeaders(caseId)
+      });
       if (res.ok) {
         showToast("Action rejected.", "info");
         fetchCase(caseId);
       }
     } catch (e) {
       showToast("Error rejecting action", "error");
+    }
+  };
+
+  const handleDownloadEvidencePack = async () => {
+    try {
+      const res = await fetch(`/api/cases/${caseId}/evidence-pack`, {
+        headers: getAuthHeaders(caseId)
+      });
+      if (!res.ok) {
+        throw new Error("Unauthorized or case not found");
+      }
+      const blob = await res.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = `evidence_pack_${caseId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+      showToast("Evidence pack PDF downloaded successfully.", "success");
+    } catch (e: any) {
+      showToast(e.message || "Failed to download evidence pack", "error");
     }
   };
 
@@ -467,11 +547,12 @@ export default function App() {
               <button
                 onClick={() => handleSimulateTime(7)}
                 disabled={loading}
-                title="Advance test clock by 7 days to trigger SLA rules"
-                className="flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-xl text-xs font-medium transition disabled:opacity-50"
+                title="Dev Tool: Advance test clock by 7 days (available when ENABLE_SIM_TIME=true)"
+                className="flex items-center space-x-1.5 bg-amber-950/40 hover:bg-amber-900/60 text-amber-200 border border-amber-600/40 px-2.5 py-1.5 rounded-xl text-xs font-medium transition disabled:opacity-50"
               >
-                <Clock className="w-3.5 h-3.5 text-cyan-400" />
-                <span className="hidden sm:inline">+7 Days Clock</span>
+                <Clock className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 px-1 py-0.5 rounded">DEV TOOL</span>
+                <span className="hidden sm:inline">+7 Days</span>
               </button>
 
               <button
@@ -577,15 +658,13 @@ export default function App() {
                     </p>
                   </div>
 
-                  <a
-                    href={`/api/cases/${caseId}/evidence-pack`}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    onClick={handleDownloadEvidencePack}
                     className="w-full flex items-center justify-center space-x-2 bg-slate-800 hover:bg-slate-700 text-slate-200 py-2.5 rounded-xl text-xs font-semibold border border-slate-700 transition"
                   >
                     <FileText className="w-3.5 h-3.5 text-indigo-400" />
                     <span>Download Evidence Pack PDF</span>
-                  </a>
+                  </button>
                 </div>
               )}
             </div>
@@ -617,9 +696,22 @@ export default function App() {
                         </span>
                       </div>
 
-                      <div className="text-[11px] text-slate-300 font-medium">
-                        To: <span className="font-mono text-indigo-300">{act.payload?.recipient || act.payload?.portal_url}</span>
-                      </div>
+                      {act.status === "pending_approval" ? (
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-slate-400 font-medium">Bank Contact Email (verify or enter official address):</label>
+                          <input
+                            type="email"
+                            value={recipientEdits[act.id] !== undefined ? recipientEdits[act.id] : (act.payload?.recipient || "")}
+                            onChange={(e) => setRecipientEdits({ ...recipientEdits, [act.id]: e.target.value })}
+                            placeholder="e.g. nodal.officer@bank.co.in"
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-indigo-300 font-mono focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-300 font-medium">
+                          To: <span className="font-mono text-indigo-300">{act.payload?.recipient || act.payload?.portal_url}</span>
+                        </div>
+                      )}
 
                       <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80 font-mono text-[11px] text-slate-300 max-h-28 overflow-y-auto whitespace-pre-wrap">
                         {act.payload?.body}

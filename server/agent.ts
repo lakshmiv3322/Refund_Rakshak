@@ -29,8 +29,8 @@ export async function runAgent(
   pending_question?: string;
   approval_request?: any;
 }> {
-  const primaryModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-  const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite";
+  const primaryModel = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+  const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.1-flash-lite";
 
   // Redact secrets BEFORE storing or sending to the model
   const { redactedText, foundSecrets, secretTypes } = redactSecrets(userMessage);
@@ -168,11 +168,15 @@ ${JSON.stringify(caseSnapshot, null, 2)}`;
     iterations++;
     const functionCalls = response.functionCalls;
 
-    // Add model turn containing function calls
-    contents.push({
-      role: "model",
-      parts: functionCalls.map((fc: any) => ({ functionCall: fc }))
-    });
+    // Add model turn containing function calls (preserving thought_signatures from candidates)
+    if (response.candidates?.[0]?.content) {
+      contents.push(response.candidates[0].content);
+    } else {
+      contents.push({
+        role: "model",
+        parts: functionCalls.map((fc: any) => ({ functionCall: fc }))
+      });
+    }
 
     const responseParts: any[] = [];
     let shouldStop = false;

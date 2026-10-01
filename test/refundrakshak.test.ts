@@ -1,8 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { calculateTATDeadlineAndCompensation, toISTDateString, getCalendarDayDiff } from "../server/rules-engine.ts";
 import { redactSecrets, maskReference, executeToolCall } from "../server/tools.ts";
 import { triageComplaintUnified } from "../server/b2b.ts";
-import { createDemoCaseState } from "../server/store.ts";
+import {
+  createDemoCaseState,
+  generatePlaintextToken,
+  hashToken,
+  sanitizeCase,
+  saveCaseState,
+  getCaseById,
+  listCasesForToken,
+  getDatabase,
+  CaseState
+} from "../server/store.ts";
+import { checkAndExecuteDueFollowups } from "../server/scheduler.ts";
 
 describe("RefundRakshak Production Rule Engine (RBI Circular RBI/2019-20/67)", () => {
   it("calculates T+1 calendar deadline and ₹100/day compensation correctly (9 days old -> 8 days delayed -> ₹800)", () => {
@@ -159,5 +170,144 @@ describe("Deterministic Tool Calling & State Hygiene", () => {
     const res = executeToolCall("lookup_verified_rule", {}, demo);
     expect(res.result.applicable).toBe(false);
     expect(res.result.reason).toBe("insufficient_evidence");
+  });
+});
+
+describe("Access Control & Token Isolation (Requirement 2)", () => {
+  it("generates 48-char hex tokens and validates hashes", () => {
+    const rawToken = generatePlaintextToken();
+    expect(rawToken.length).toBe(48);
+    const hashed = hashToken(rawToken);
+    expect(hashed.length).toBe(64); // sha256 hex
+    expect(hashToken(rawToken)).toBe(hashed); // deterministic
+  });
+
+  it("proves Case A's token cannot read Case B", () => {
+    const tokenA = generatePlaintextToken();
+    const tokenB = generatePlaintextToken();
+
+    const caseA: CaseState = {
+      ...createDemoCaseState(),
+      case_id: "CASE-USER-A",
+      token_hash: hashToken(tokenA)
+    };
+
+    const caseB: CaseState = {
+      ...createDemoCaseState(),
+      case_id: "CASE-USER-B",
+      token_hash: hashToken(tokenB)
+    };
+
+    saveCaseState(caseA);
+    saveCaseState(caseB);
+
+    // Attempting to authenticate with Token A against Case B
+    const hashA = hashToken(tokenA);
+    expect(hashA).not.toBe(caseB.token_hash);
+
+    // Querying cases for User A returns Case A only, never Case B
+    const userACases = listCasesForToken(hashA);
+    expect(userACases.some(c => c.case_id === "CASE-USER-A")).toBe(true);
+    expect(userACases.some(c => c.case_id === "CASE-USER-B")).toBe(false);
+  });
+
+  it("sanitizes cases by stripping token_hash and auth_token", () => {
+    const rawToken = generatePlaintextToken();
+    const testCase: CaseState = {
+      ...createDemoCaseState(),
+      auth_token: "secret_legacy_token",
+      token_hash: hashToken(rawToken)
+    };
+
+    const sanitized = sanitizeCase(testCase);
+    expect((sanitized as any).auth_token).toBeUndefined();
+    expect((sanitized as any).token_hash).toBeUndefined();
+    expect(sanitized.case_id).toBe(testCase.case_id);
+  });
+});
+
+describe("SQLite Persistence & Atomic Storage (Requirement 7)", () => {
+  it("initializes SQLite with schema versioning", () => {
+    const db = getDatabase();
+    const versionRow = db.prepare("SELECT MAX(version) as version FROM schema_version").get() as { version: number };
+    expect(versionRow.version).toBeGreaterThanOrEqual(1);
+  });
+
+  it("persists and retrieves cases from SQLite atomically", () => {
+    const id = "SQLITE-TEST-" + Math.floor(Math.random() * 10000);
+    const token = generatePlaintextToken();
+    const newCase: CaseState = {
+      ...createDemoCaseState(),
+      case_id: id,
+      token_hash: hashToken(token),
+      transaction_facts: {
+        ...createDemoCaseState().transaction_facts,
+        amount: 8888,
+        transaction_reference: "REF-SQLITE-8888"
+      }
+    };
+
+    saveCaseState(newCase);
+    const loaded = getCaseById(id);
+    expect(loaded).not.toBeNull();
+    expect(loaded?.transaction_facts.amount).toBe(8888);
+    expect(loaded?.transaction_facts.transaction_reference).toBe("REF-SQLITE-8888");
+  });
+});
+
+describe("Scheduler Idempotency, Real Time & Recommended Wait (Requirement 6)", () => {
+  it("updates latest estimate and creates nodal action with recommended wait phrasing", () => {
+    const schedCaseId = "SCHED-TEST-" + Math.floor(Math.random() * 10000);
+    const token = generatePlaintextToken();
+
+    const schedCase: CaseState = {
+      ...createDemoCaseState(),
+      case_id: schedCaseId,
+      token_hash: hashToken(token),
+      classification: "supported_upi_failed_debited_not_credited",
+      transaction_facts: {
+        ...createDemoCaseState().transaction_facts,
+        amount: 3000,
+        transaction_date: "2026-09-20"
+      },
+      bank_complaint_date: "2026-09-21",
+      bank_response: null,
+      pending_actions: [],
+      followups: [
+        {
+          id: "fu_sched_1",
+          due_date: "2026-09-28T00:00:00Z",
+          condition: "bank_no_response_7_days",
+          action_type: "prepare_nodal_escalation",
+          status: "pending"
+        }
+      ]
+    };
+
+    saveCaseState(schedCase);
+
+    // Run scheduler at simulated date 2026-10-01 (10 days after bank complaint)
+    const result1 = checkAndExecuteDueFollowups("2026-10-01T12:00:00Z");
+    const updated1 = getCaseById(schedCaseId)!;
+
+    // Followup executed
+    expect(updated1.followups[0].status).toBe("executed");
+    expect(updated1.escalation_stage).toBe("nodal_escalation_ready");
+
+    // Action created
+    expect(updated1.pending_actions.length).toBe(1);
+    const nodalAction = updated1.pending_actions[0];
+    expect(nodalAction.type).toBe("nodal_officer_escalation");
+    // Phrasing test: "recommended wait", not an RBI requirement
+    expect(nodalAction.payload.body).toContain("industry-standard recommended wait period, not an RBI statutory clause");
+
+    // Estimate stored on case
+    expect(updated1.latest_compensation_estimate).toBeGreaterThan(0);
+
+    // Idempotency: run scheduler again at same date
+    const result2 = checkAndExecuteDueFollowups("2026-10-01T12:00:00Z");
+    const updated2 = getCaseById(schedCaseId)!;
+    // Must NOT create duplicate nodal actions
+    expect(updated2.pending_actions.length).toBe(1);
   });
 });
