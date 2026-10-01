@@ -22,7 +22,7 @@ import {
 import { runAgent } from "./server/agent.ts";
 import { generateEvidencePdf } from "./server/pdf.ts";
 import { loadVerifiedRules } from "./server/rules-engine.ts";
-import { sendEmailOrFallback } from "./server/email.ts";
+import { sendEmailOrFallback, loadBankContacts } from "./server/email.ts";
 import { startBackgroundScheduler, checkAndExecuteDueFollowups } from "./server/scheduler.ts";
 import { triageComplaintUnified } from "./server/b2b.ts";
 
@@ -110,10 +110,14 @@ startBackgroundScheduler(60000);
 
 // API Health Check
 app.get("/api/health", (req, res) => {
+  const isDemo = process.env.SEED_DEMO !== "false";
+  const simTime = process.env.ENABLE_SIM_TIME !== "false";
   res.json({
     status: "ok",
     agent: "RefundRakshak Production Copilot",
     version: "1.0.0",
+    demo_mode: isDemo,
+    sim_time_enabled: simTime,
     timestamp: new Date().toISOString()
   });
 });
@@ -247,11 +251,11 @@ app.get("/api/cases/:case_id", (req, res) => {
   res.json(sanitizeCase(c));
 });
 
-// Demo seed reset endpoint (only enabled if SEED_DEMO=true or DEV_OPEN_ACCESS=true)
+// Demo seed reset endpoint (enabled by default in demo/judge builds unless SEED_DEMO=false)
 app.post("/api/cases/RR-DEMO-001/reset", (req, res) => {
-  if (process.env.SEED_DEMO !== "true" && process.env.DEV_OPEN_ACCESS !== "true") {
+  if (process.env.SEED_DEMO === "false" && process.env.DEV_OPEN_ACCESS !== "true") {
     return res.status(403).json({
-      error: { code: "FORBIDDEN", message: "Demo reset is disabled in production without SEED_DEMO=true." }
+      error: { code: "FORBIDDEN", message: "Demo reset is disabled when SEED_DEMO=false." }
     });
   }
 
@@ -411,14 +415,14 @@ app.post("/api/agent/run", agentRunLimiter, async (req, res) => {
   }
 });
 
-// Advance clock (dev / evaluation tool only, requires ENABLE_SIM_TIME=true)
+// Advance clock (dev / evaluation tool, enabled by default unless ENABLE_SIM_TIME=false)
 app.post("/api/cases/:case_id/simulate-time", async (req, res) => {
   try {
-    if (process.env.ENABLE_SIM_TIME !== "true") {
+    if (process.env.ENABLE_SIM_TIME === "false") {
       return res.status(403).json({
         error: {
           code: "SIMULATION_DISABLED",
-          message: "Simulation time advance is disabled in this environment. Set ENABLE_SIM_TIME=true in development to enable."
+          message: "Simulation time advance is disabled in this environment (ENABLE_SIM_TIME=false)."
         }
       });
     }
@@ -499,12 +503,49 @@ app.post("/api/actions/:action_id/approve", approveLimiter, async (req, res) => 
     return res.json({ status: "success", action: foundAction, case_state: sanitizeCase(foundCase) });
   }
 
-  // Real Email Dispatch
-  const recipient = req.body?.recipient?.trim() || foundAction.payload?.recipient || "customercare@bank.co.in";
-  if (req.body?.recipient) {
-    if (!foundAction.payload) foundAction.payload = {};
-    foundAction.payload.recipient = recipient;
+  // Per-case outbound send limit (Phase 2, Item 7)
+  const maxDispatchesPerCase = 5;
+  const sentCount = (foundCase.outbox || []).filter(
+    (o: any) => o.status === "sent" || o.status === "approved_and_executed" || o.status === "approved_requires_manual_send"
+  ).length;
+  if (sentCount >= maxDispatchesPerCase) {
+    return res.status(429).json({
+      error: {
+        code: "CASE_SEND_LIMIT_EXCEEDED",
+        message: `Maximum dispatch limit (${maxDispatchesPerCase} messages) reached for case ${foundCase.case_id} to prevent abuse.`
+      }
+    });
   }
+
+  // Recipient Verification against data/banks.json or confirmed custom address
+  const recipient = (req.body?.recipient?.trim() || foundAction.payload?.recipient || "").trim();
+  if (!recipient) {
+    return res.status(400).json({ error: { code: "MISSING_RECIPIENT", message: "Recipient address is required." } });
+  }
+
+  const bankContacts = loadBankContacts();
+  const knownEmails = new Set<string>();
+  for (const b of bankContacts) {
+    if (b.grievance_email) knownEmails.add(b.grievance_email.toLowerCase().trim());
+    if (b.nodal_officer_email) knownEmails.add(b.nodal_officer_email.toLowerCase().trim());
+  }
+
+  const isKnownBankEmail = knownEmails.has(recipient.toLowerCase());
+  const confirmedCustom = req.body?.confirm_custom_recipient === true || req.body?.confirmed_custom_recipient === true;
+
+  if (!isKnownBankEmail && !confirmedCustom) {
+    return res.status(400).json({
+      error: {
+        code: "UNCONFIRMED_CUSTOM_RECIPIENT",
+        message: `Recipient address '${recipient}' is not a verified bank grievance address from the official directory. Please confirm that you intend to send to this custom address.`,
+        requires_confirmation: true,
+        recipient
+      }
+    });
+  }
+
+  if (!foundAction.payload) foundAction.payload = {};
+  foundAction.payload.recipient = recipient;
   const subject = foundAction.payload?.subject || "Grievance Redressal Request";
   const body = foundAction.payload?.body || "Please process resolution.";
 

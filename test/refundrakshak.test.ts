@@ -1,7 +1,16 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { calculateTATDeadlineAndCompensation, toISTDateString, getCalendarDayDiff } from "../server/rules-engine.ts";
+import {
+  calculateTATDeadlineAndCompensation,
+  toISTDateString,
+  getCalendarDayDiff,
+  loadVerifiedRules,
+  getScenarioById,
+  getAllScenarios,
+  checkUpiScenarioAmbiguity
+} from "../server/rules-engine.ts";
 import { redactSecrets, maskReference, executeToolCall } from "../server/tools.ts";
 import { triageComplaintUnified } from "../server/b2b.ts";
+import { findBankContact, loadBankContacts } from "../server/email.ts";
 import {
   createDemoCaseState,
   generatePlaintextToken,
@@ -11,7 +20,7 @@ import {
   getCaseById,
   listCasesForToken,
   getDatabase,
-  CaseState
+  type CaseState
 } from "../server/store.ts";
 import { checkAndExecuteDueFollowups } from "../server/scheduler.ts";
 
@@ -309,5 +318,88 @@ describe("Scheduler Idempotency, Real Time & Recommended Wait (Requirement 6)", 
     const updated2 = getCaseById(schedCaseId)!;
     // Must NOT create duplicate nodal actions
     expect(updated2.pending_actions.length).toBe(1);
+  });
+});
+
+describe("Verified Scenario Table & Ambiguity Resolution (Phase 2, Requirement 5)", () => {
+  it("loads scenario table from data/verified_rules.json with verified circular references", () => {
+    const scenarios = getAllScenarios();
+    expect(scenarios.length).toBeGreaterThanOrEqual(4);
+
+    const upiP2P = getScenarioById("upi_p2p_debit_not_credited");
+    expect(upiP2P).toBeDefined();
+    expect(upiP2P?.tat_days).toBe(1);
+    expect(upiP2P?.day_basis).toBe("calendar");
+    expect(upiP2P?.circular_row).toContain("Item 4(a)");
+    expect(upiP2P?.status_label).toContain("RBI Circular RBI/2019-20/67");
+
+    const upiP2M = getScenarioById("upi_p2m_merchant_debit_failed");
+    expect(upiP2M).toBeDefined();
+    expect(upiP2M?.tat_days).toBe(5);
+    expect(upiP2M?.day_basis).toBe("calendar");
+    expect(upiP2M?.circular_row).toContain("Item 4(b)");
+  });
+
+  it("calculates TAT and delayed compensation for UPI P2M merchant scenario (T+5)", () => {
+    // 9 calendar days elapsed, T+5 deadline -> 4 days delayed -> ₹400
+    const calc = calculateTATDeadlineAndCompensation("2026-09-22", "2026-10-01", "upi_p2m_merchant_debit_failed");
+    expect(calc.tat_days).toBe(5);
+    expect(calc.calendar_days_elapsed).toBe(9);
+    expect(calc.days_delayed).toBe(4);
+    expect(calc.potential_compensation_estimate).toBe(400);
+    expect(calc.circular_row).toContain("Item 4(b)");
+  });
+
+  it("detects ambiguity when UPI transaction does not state P2P vs P2M and provides clarifying question", () => {
+    const text = "My UPI payment failed and money was debited from my account.";
+    const ambiguity = checkUpiScenarioAmbiguity(text, "2026-09-22", "2026-10-01");
+    expect(ambiguity.isAmbiguous).toBe(true);
+    expect(ambiguity.p2pCalculation.days_delayed).toBe(8);
+    expect(ambiguity.p2mCalculation?.days_delayed).toBe(4);
+    expect(ambiguity.clarifyingQuestion).toContain("Was this payment sent to an individual person (P2P");
+    expect(ambiguity.clarifyingQuestion).toContain("or to a merchant/shopkeeper/online store (P2M");
+  });
+
+  it("resolves to P2M without ambiguity when merchant is mentioned", () => {
+    const text = "My UPI payment to Swiggy store failed and debited.";
+    const ambiguity = checkUpiScenarioAmbiguity(text, "2026-09-22", "2026-10-01", "Swiggy");
+    expect(ambiguity.isAmbiguous).toBe(false);
+    expect(ambiguity.selectedScenario).toBe("upi_p2m_merchant_debit_failed");
+  });
+
+  it("resolves to P2P without ambiguity when friend/personal transfer is mentioned", () => {
+    const text = "Sent money to my friend via UPI, debited but not credited.";
+    const ambiguity = checkUpiScenarioAmbiguity(text, "2026-09-22", "2026-10-01");
+    expect(ambiguity.isAmbiguous).toBe(false);
+    expect(ambiguity.selectedScenario).toBe("upi_p2p_debit_not_credited");
+  });
+});
+
+describe("Bank Contact Directory & Recipient Verification (Phase 2, Requirements 7 & 8)", () => {
+  it("loads bank contacts from data/banks.json and matches aliases", () => {
+    const banks = loadBankContacts();
+    expect(banks.length).toBeGreaterThanOrEqual(5);
+
+    const sbi = findBankContact("SBI");
+    expect(sbi).not.toBeNull();
+    expect(sbi?.grievance_email).toBe("customercare@sbi.co.in");
+    expect(sbi?.nodal_officer_email).toBe("nodalofficer@sbi.co.in");
+
+    const hdfc = findBankContact("HDFC Bank");
+    expect(hdfc).not.toBeNull();
+    expect(hdfc?.nodal_officer_email).toBe("pno@hdfcbank.com");
+  });
+
+  it("verifies known bank grievance addresses", () => {
+    const banks = loadBankContacts();
+    const knownEmails = new Set<string>();
+    banks.forEach(b => {
+      knownEmails.add(b.grievance_email.toLowerCase());
+      knownEmails.add(b.nodal_officer_email.toLowerCase());
+    });
+
+    expect(knownEmails.has("customercare@sbi.co.in")).toBe(true);
+    expect(knownEmails.has("pno@hdfcbank.com")).toBe(true);
+    expect(knownEmails.has("random_attacker@evil.com")).toBe(false);
   });
 });

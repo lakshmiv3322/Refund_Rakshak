@@ -9,8 +9,8 @@ metadata:
   category: "Fintech Grievance & Legal-Tech Agent"
   description: "Production-grade multilingual AI agent that processes Indian UPI and payment grievances, applies verified RBI TAT rules, prepares deterministic escalations, and automates grievance redressal with explicit human authorization."
 spec:
-  endpoint: "<DEPLOYED_ENDPOINT>/api/agent/run"
-  healthEndpoint: "<DEPLOYED_HEALTH>/api/health"
+  endpoint: "/api/agent/run"
+  healthEndpoint: "/api/health"
   supportedInput:
     - "text/plain"
     - "application/json"
@@ -31,15 +31,17 @@ spec:
     - name: update_case_facts
       description: "Updates and validates transaction facts (amount, date, reference, bank, status) with strict validation."
     - name: extract_transaction_evidence
-      description: "Extracts structured transaction evidence from payment screenshots or text."
+      description: "Extracts structured transaction evidence from payment screenshots or text using Gemini vision with structured schema."
     - name: record_classification
       description: "Records grievance classification (supported UPI failure, unauthorized fraud, merchant refund, ATM dispute) with rationale."
     - name: lookup_verified_rule
       description: "Looks up verified statutory rules from RBI circulars (RBI/2019-20/67)."
     - name: calculate_deadline_and_estimate
-      description: "Calculates deterministic T+1 reversal deadline and statutory delayed-compensation estimate."
+      description: "Calculates deterministic TAT reversal deadline and statutory delayed-compensation estimate based on scenario table."
     - name: validate_ombudsman_preconditions
       description: "Validates preconditions under the RBI Integrated Ombudsman Scheme (30-day waiting period from initial bank complaint)."
+    - name: verify_bank_contact
+      description: "Verifies official bank grievance and Principal Nodal Officer contact details using Google Search grounding."
     - name: generate_bank_complaint
       description: "Generates a structured bank grievance redressal complaint draft citing relevant circulars."
     - name: generate_nodal_escalation
@@ -56,6 +58,39 @@ spec:
       description: "Prompts the user for specific missing transaction details and pauses agent execution."
     - name: stop_branch
       description: "Terminates standard grievance path for safety branch (cybercrime fraud) or out-of-scope disputes."
+  examples:
+    - title: "Failed UPI debit grievance resolution"
+      description: "User submits an unresolved UPI failed transaction with debit. Agent verifies evidence, applies RBI TAT (T+1 calendar day), calculates statutory compensation, and proposes a bank complaint draft for approval."
+      request:
+        path: "/api/agent/run"
+        method: "POST"
+        headers:
+          Content-Type: "application/json"
+          Authorization: "Bearer <case_token>"
+        body:
+          case_id: "RR-DEMO-001"
+          message: "My UPI payment of Rs 2400 to grocery store failed on 22 Sept, but money was debited from my SBI account. UTR is DEMOUPI123456."
+          language: "en"
+      response:
+        status: 200
+        body:
+          case_id: "RR-DEMO-001"
+          message: "I have recorded your grievance for the failed UPI transaction of ₹2,400 on 2026-09-22 with State Bank of India (Ref: ****3456). Under RBI Circular RBI/2019-20/67 (Item 4(a)), reversal TAT is T+1 calendar day. Since 9 days have elapsed, the potential compensation estimate is ₹800 (subject to verification). I have prepared an initial complaint draft to State Bank of India for your review and explicit approval."
+          language: "en"
+          status: "approval_required"
+          approval_request:
+            id: "act_bk_01"
+            type: "bank_complaint"
+            payload:
+              recipient: "customercare@sbi.co.in"
+              bank_name: "State Bank of India"
+              subject: "Grievance Redressal: UPI Failed & Debited (Ref: ****3456)"
+          case_state:
+            case_id: "RR-DEMO-001"
+            classification: "supported_upi_failed_debited_not_credited"
+            branch: "supported_upi_failed_debit"
+            latest_compensation_estimate: 800
+            latest_days_delayed: 8
   safetyNotes:
     - "Does not offer legal advice or guarantee financial recovery."
     - "Requires explicit human authorization prior to sending any outbound communication."

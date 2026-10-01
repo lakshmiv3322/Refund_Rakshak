@@ -14,10 +14,34 @@ export interface VerifiedRule {
   applicability_conditions: any;
   exclusions_or_caveats: string[];
   verified_at: string | null;
+  last_checked_date?: string;
   status: string;
 }
 
-export function loadVerifiedRules(): { rules: VerifiedRule[] } {
+export interface RuleScenario {
+  scenario_id: string;
+  name: string;
+  category: string;
+  circular_row: string;
+  circular_reference: string;
+  tat_days: number;
+  day_basis: "calendar" | "working";
+  compensation_per_day: number;
+  auto_reversal: boolean;
+  official_url: string;
+  last_checked_date: string;
+  status_label: string;
+  description: string;
+}
+
+export interface VerifiedRulesData {
+  rules: VerifiedRule[];
+  scenarios: RuleScenario[];
+}
+
+let cachedRulesData: VerifiedRulesData | null = null;
+
+export function loadVerifiedRules(): VerifiedRulesData {
   const rulesPath = process.env.RULES_PATH || path.join(process.cwd(), "data", "verified_rules.json");
   try {
     if (!fs.existsSync(rulesPath)) {
@@ -27,11 +51,26 @@ export function loadVerifiedRules(): { rules: VerifiedRule[] } {
     if (!content.trim()) {
       throw new Error(`Verified rules file at ${rulesPath} is empty`);
     }
-    return JSON.parse(content);
+    const parsed = JSON.parse(content);
+    cachedRulesData = {
+      rules: parsed.rules || [],
+      scenarios: parsed.scenarios || []
+    };
+    return cachedRulesData;
   } catch (err: any) {
     console.error("FATAL: Failed to load verified rules:", err.message);
     throw err;
   }
+}
+
+export function getAllScenarios(): RuleScenario[] {
+  const data = cachedRulesData || loadVerifiedRules();
+  return data.scenarios;
+}
+
+export function getScenarioById(scenarioId: string): RuleScenario | undefined {
+  const scenarios = getAllScenarios();
+  return scenarios.find(s => s.scenario_id === scenarioId);
 }
 
 /**
@@ -77,11 +116,15 @@ export function addCalendarDays(dateStr: string, days: number): string {
 }
 
 /**
- * Pure deterministic calculation according to RBI Circular RBI/2019-20/67:
- * - TAT for UPI debit-not-credited: T + 1 calendar day.
- * - Compensation: ₹100 per day of delay beyond T + 1 calendar day.
+ * Deterministic calculation based on verified scenario table from RBI Circular RBI/2019-20/67:
+ * - Default scenario: upi_p2p_debit_not_credited (Item 4(a), T+1 calendar day, ₹100/day).
+ * - Optional scenario: upi_p2m_merchant_debit_failed (Item 4(b), T+5 calendar days, ₹100/day).
  */
-export function calculateTATDeadlineAndCompensation(transactionDateInput: string, simulatedNowInput: string) {
+export function calculateTATDeadlineAndCompensation(
+  transactionDateInput: string,
+  simulatedNowInput: string,
+  scenarioId = "upi_p2p_debit_not_credited"
+) {
   const txDateStr = toISTDateString(transactionDateInput);
   const nowStr = toISTDateString(simulatedNowInput);
 
@@ -90,10 +133,26 @@ export function calculateTATDeadlineAndCompensation(transactionDateInput: string
     throw new Error(`Transaction date ${txDateStr} cannot be in the future relative to ${nowStr}.`);
   }
 
-  // T + 1 calendar day deadline
-  const deadlineStr = addCalendarDays(txDateStr, 1);
-  const daysDelayed = Math.max(0, diffDays - 1);
-  const potentialCompensation = daysDelayed * 100;
+  const scenario = getScenarioById(scenarioId) || {
+    scenario_id: "upi_p2p_debit_not_credited",
+    name: "UPI Person-to-Person (P2P): Account debited, beneficiary not credited",
+    category: "UPI",
+    circular_row: "RBI/2019-20/67 Annexure Item 4(a)",
+    circular_reference: "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 4(a)",
+    tat_days: 1,
+    day_basis: "calendar" as const,
+    compensation_per_day: 100,
+    auto_reversal: true,
+    official_url: "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+    last_checked_date: "2026-03-30",
+    status_label: "Source: RBI Circular RBI/2019-20/67 Item 4(a), last checked 2026-03-30",
+    description: "Customer account debited but beneficiary account not credited in a Person to Person (P2P) transaction."
+  };
+
+  const tatDays = scenario.tat_days;
+  const deadlineStr = addCalendarDays(txDateStr, tatDays);
+  const daysDelayed = Math.max(0, diffDays - tatDays);
+  const potentialCompensation = daysDelayed * scenario.compensation_per_day;
 
   return {
     transaction_date: txDateStr,
@@ -103,6 +162,85 @@ export function calculateTATDeadlineAndCompensation(transactionDateInput: string
     days_delayed: daysDelayed,
     potential_compensation_estimate: potentialCompensation,
     caveat: "Potential compensation estimate, subject to verification.",
-    explanation: `Transaction date ${txDateStr} (T). Under RBI Circular RBI/2019-20/67, reversal TAT is T+1 calendar day (${deadlineStr}). As of ${nowStr}, transaction has been delayed by ${daysDelayed} day(s) beyond T+1 at statutory rate of ₹100/day.`
+    explanation: `Transaction date ${txDateStr} (T). Under ${scenario.circular_reference}, reversal TAT is T+${tatDays} ${scenario.day_basis} day(s) (${deadlineStr}). As of ${nowStr}, transaction has been delayed by ${daysDelayed} day(s) beyond T+${tatDays} at statutory rate of ₹${scenario.compensation_per_day}/day.`,
+    scenario_id: scenario.scenario_id,
+    circular_row: scenario.circular_row,
+    circular_reference: scenario.circular_reference,
+    tat_days: scenario.tat_days,
+    day_basis: scenario.day_basis,
+    compensation_per_day: scenario.compensation_per_day,
+    official_url: scenario.official_url,
+    status_label: scenario.status_label
+  };
+}
+
+/**
+ * Checks if a UPI failure might be ambiguous between P2P (Item 4(a) - T+1) and P2M (Item 4(b) - T+5).
+ * If ambiguous, computes both outcomes and formulates a clarifying question.
+ */
+export function checkUpiScenarioAmbiguity(
+  text: string,
+  txDate: string,
+  simNow: string,
+  merchantName?: string | null
+): {
+  isAmbiguous: boolean;
+  selectedScenario: string;
+  p2pCalculation: ReturnType<typeof calculateTATDeadlineAndCompensation>;
+  p2mCalculation?: ReturnType<typeof calculateTATDeadlineAndCompensation>;
+  clarifyingQuestion?: string;
+} {
+  const lower = (text || "").toLowerCase();
+  const p2pCalc = calculateTATDeadlineAndCompensation(txDate, simNow, "upi_p2p_debit_not_credited");
+  const p2mCalc = calculateTATDeadlineAndCompensation(txDate, simNow, "upi_p2m_merchant_debit_failed");
+
+  // Clear merchant indicators
+  const hasMerchantClues =
+    Boolean(merchantName) ||
+    lower.includes("merchant") ||
+    lower.includes("store") ||
+    lower.includes("shop") ||
+    lower.includes("swiggy") ||
+    lower.includes("zomato") ||
+    lower.includes("amazon") ||
+    lower.includes("flipkart") ||
+    lower.includes("pos") ||
+    lower.includes("qr code at counter");
+
+  // Clear peer-to-peer clues
+  const hasP2PClues =
+    lower.includes("friend") ||
+    lower.includes("brother") ||
+    lower.includes("sister") ||
+    lower.includes("family") ||
+    lower.includes("p2p") ||
+    lower.includes("sent to my") ||
+    lower.includes("personal transfer");
+
+  if (hasMerchantClues && !hasP2PClues) {
+    return {
+      isAmbiguous: false,
+      selectedScenario: "upi_p2m_merchant_debit_failed",
+      p2pCalculation: p2pCalc,
+      p2mCalculation: p2mCalc
+    };
+  }
+
+  if (hasP2PClues && !hasMerchantClues) {
+    return {
+      isAmbiguous: false,
+      selectedScenario: "upi_p2p_debit_not_credited",
+      p2pCalculation: p2pCalc,
+      p2mCalculation: p2mCalc
+    };
+  }
+
+  // Ambiguous: could be P2P (T+1) or P2M (T+5)
+  return {
+    isAmbiguous: true,
+    selectedScenario: "upi_p2p_debit_not_credited", // default to P2P standard
+    p2pCalculation: p2pCalc,
+    p2mCalculation: p2mCalc,
+    clarifyingQuestion: `Was this payment sent to an individual person (P2P: friend or family, where RBI reversal TAT is T+1 calendar day) or to a merchant/shopkeeper/online store (P2M: where RBI reversal TAT is T+5 calendar days)?`
   };
 }

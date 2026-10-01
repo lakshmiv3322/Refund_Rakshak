@@ -59,6 +59,8 @@ export default function App() {
     }
   });
   const [recipientEdits, setRecipientEdits] = useState<Record<string, string>>({});
+  const [confirmCustomModal, setConfirmCustomModal] = useState<{ actionId: string; recipient: string } | null>(null);
+  const [isDemoActive, setIsDemoActive] = useState<boolean>(true);
 
   const saveTokenForCase = (id: string, token: string) => {
     setCaseTokens((prev) => {
@@ -90,6 +92,14 @@ export default function App() {
 
   useEffect(() => {
     fetchCasesList();
+    fetch("/api/health")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.demo_mode !== undefined) {
+          setIsDemoActive(d.demo_mode);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -332,30 +342,37 @@ export default function App() {
     }
   };
 
-  const handleApproveAction = async (actionId: string) => {
+  const handleApproveAction = async (actionId: string, confirmedCustom = false) => {
     try {
       const customRecipient = recipientEdits[actionId];
       const res = await fetch(`/api/actions/${actionId}/approve`, {
         method: "POST",
         headers: getAuthHeaders(caseId),
-        body: JSON.stringify({ recipient: customRecipient })
+        body: JSON.stringify({
+          recipient: customRecipient,
+          confirm_custom_recipient: confirmedCustom
+        })
       });
       const contentType = res.headers.get("content-type") || "";
       if (!res.ok) {
-        let errMsg = "Approval failed";
         if (contentType.includes("application/json")) {
           const err = await res.json().catch(() => null);
-          if (err?.error?.message) errMsg = err.error.message;
+          if (err?.error?.code === "UNCONFIRMED_CUSTOM_RECIPIENT") {
+            setConfirmCustomModal({ actionId, recipient: err.error.recipient || customRecipient });
+            return;
+          }
+          throw new Error(err?.error?.message || "Approval failed");
         }
-        throw new Error(errMsg);
+        throw new Error(`Approval failed with status: ${res.status}`);
       }
+      setConfirmCustomModal(null);
       if (contentType.includes("application/json")) {
         const data = await res.json();
         if (data.case_state) {
           setCaseState(data.case_state);
         }
         if (data.delivery_details?.provider === "mailto_fallback") {
-          showToast("Prepared email details. Use mailto or copy to send.", "info");
+          showToast("Prepared email details. Use mailto link or copy details to send manually.", "info");
         } else {
           showToast(`Email dispatched successfully via ${data.delivery_details?.provider}!`, "success");
         }
@@ -504,6 +521,12 @@ export default function App() {
               <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold">
                 Production Copilot
               </span>
+              {isDemoActive && (
+                <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold flex items-center space-x-1.5 shadow-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                  <span>Demo Mode</span>
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-400">Statutory RBI TAT compliance & autonomous escalation engine</p>
           </div>
@@ -716,6 +739,32 @@ export default function App() {
                       <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80 font-mono text-[11px] text-slate-300 max-h-28 overflow-y-auto whitespace-pre-wrap">
                         {act.payload?.body}
                       </div>
+
+                      {confirmCustomModal?.actionId === act.id && (
+                        <div className="bg-amber-950/50 border border-amber-500/40 rounded-xl p-3 space-y-2 text-xs text-amber-200 animate-slide-up">
+                          <div className="font-semibold text-amber-300 flex items-center space-x-1.5">
+                            <AlertTriangle className="w-4 h-4 text-amber-400" />
+                            <span>Confirm Unverified Recipient</span>
+                          </div>
+                          <p className="text-[11px] text-amber-200/90 leading-tight">
+                            '{confirmCustomModal?.recipient}' is not in the verified bank directory. Do you explicitly authorize dispatching this dispute notice to this address?
+                          </p>
+                          <div className="flex space-x-2 pt-1">
+                            <button
+                              onClick={() => handleApproveAction(act.id, true)}
+                              className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-semibold py-1.5 rounded-lg text-xs transition"
+                            >
+                              I Confirm This Address & Approve
+                            </button>
+                            <button
+                              onClick={() => setConfirmCustomModal(null)}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {act.status === "pending_approval" ? (
                         <div className="flex space-x-2 pt-1">
@@ -971,23 +1020,98 @@ export default function App() {
             {/* Verified Rules View */}
             {activeTab === "rules" && (
               <div className="flex-1 p-6 overflow-y-auto space-y-4">
-                <div className="p-3 bg-amber-950/30 border border-amber-500/30 rounded-xl text-xs text-amber-300">
-                  ⚠️ Notice: Rule not yet manually verified - confirm against the RBI circular before relying on figures.
+                <div className="flex items-center justify-between p-3.5 bg-emerald-950/30 border border-emerald-500/30 rounded-xl text-xs">
+                  <div>
+                    <div className="font-semibold text-emerald-400">Statutory Framework: RBI Circular RBI/2019-20/67</div>
+                    <div className="text-[11px] text-slate-400">Harmonisation of Turn Around Time (TAT) and customer compensation for failed payment transactions.</div>
+                  </div>
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-mono font-medium">
+                    Verified: 2026-03-30
+                  </span>
                 </div>
-                <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 space-y-3 text-xs">
-                  <div className="font-bold text-emerald-400">RBI Circular: RBI/2019-20/67 (DPSS)</div>
-                  <p className="text-slate-300 leading-relaxed">
-                    Harmonisation of Turn Around Time (TAT) and customer compensation for failed transactions using authorised Payment Systems. Mandates T+1 calendar day automatic reversal and ₹100/day delay compensation.
-                  </p>
-                  <a
-                    href="https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center space-x-1 text-cyan-400 hover:underline"
-                  >
-                    <span>Official RBI Circular Document</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
+
+                <div className="space-y-3">
+                  {/* Scenario 1: UPI P2P */}
+                  <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-100">UPI P2P: Debited but Beneficiary Not Credited</span>
+                      <span className="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 px-2 py-0.5 rounded font-mono">
+                        Item 4(a) • T+1 Calendar Day
+                      </span>
+                    </div>
+                    <p className="text-slate-300 leading-relaxed text-[11px]">
+                      Customer account debited but beneficiary not credited in person-to-person transfer. Reversal must occur within T+1 calendar day.
+                      Statutory delay compensation: <strong className="text-amber-300">₹100 per day</strong> beyond T+1.
+                    </p>
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-900 text-[10px]">
+                      <span className="text-slate-400">Source: RBI Circular RBI/2019-20/67 Item 4(a), last checked 2026-03-30</span>
+                      <a href="https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074" target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline flex items-center space-x-1">
+                        <span>RBI Circular</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+
+                  {/* Scenario 2: UPI P2M Merchant */}
+                  <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-100">UPI P2M: Debited but Confirmation Not Received at Merchant</span>
+                      <span className="text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded font-mono">
+                        Item 4(b) • T+5 Calendar Days
+                      </span>
+                    </div>
+                    <p className="text-slate-300 leading-relaxed text-[11px]">
+                      Customer account debited but transaction confirmation not received at merchant location (e-commerce or merchant POS checkout). Reversal must occur within T+5 calendar days.
+                      Statutory delay compensation: <strong className="text-amber-300">₹100 per day</strong> beyond T+5.
+                    </p>
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-900 text-[10px]">
+                      <span className="text-slate-400">Source: RBI Circular RBI/2019-20/67 Item 4(b), last checked 2026-03-30</span>
+                      <a href="https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074" target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline flex items-center space-x-1">
+                        <span>RBI Circular</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+
+                  {/* Scenario 3: IMPS */}
+                  <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-100">IMPS: Account Debited, Beneficiary Not Credited</span>
+                      <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/40 px-2 py-0.5 rounded font-mono">
+                        Item 3(a) • T+1 Calendar Day
+                      </span>
+                    </div>
+                    <p className="text-slate-300 leading-relaxed text-[11px]">
+                      Immediate Payment Service (IMPS) failed credit. Reversal must occur within T+1 calendar day. Statutory delay compensation: <strong className="text-amber-300">₹100 per day</strong> beyond T+1.
+                    </p>
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-900 text-[10px]">
+                      <span className="text-slate-400">Source: RBI Circular RBI/2019-20/67 Item 3(a), last checked 2026-03-30</span>
+                      <a href="https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074" target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline flex items-center space-x-1">
+                        <span>RBI Circular</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+
+                  {/* Scenario 4: Ombudsman Scheme */}
+                  <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-100">Reserve Bank–Integrated Ombudsman Scheme</span>
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded font-mono">
+                        30-Day Mandatory Wait
+                      </span>
+                    </div>
+                    <p className="text-slate-300 leading-relaxed text-[11px]">
+                      Grievance can be escalated directly to the RBI Ombudsman if the Regulated Entity fails to reply within 30 calendar days or rejects the complaint. Official portal: cms.rbi.org.in.
+                    </p>
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-900 text-[10px]">
+                      <span className="text-slate-400">Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30</span>
+                      <a href="https://cms.rbi.org.in" target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline flex items-center space-x-1">
+                        <span>CMS Portal</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

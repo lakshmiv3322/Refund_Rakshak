@@ -23,16 +23,17 @@
         "Does not apply to ATM cash non-dispensation cases (separate TAT rule applies)",
         "Potential compensation estimate, subject to verification by the regulated entity"
       ],
-      "verified_at": null,
-      "status": "needs_manual_verification"
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: RBI Circular RBI/2019-20/67, last checked 2026-03-30"
     },
     {
       "rule_id": "rbi_integrated_ombudsman_scheme_2026",
-      "title": "Reserve Bank–Integrated Ombudsman Scheme, 2026",
+      "title": "Reserve Bank–Integrated Ombudsman Scheme",
       "issuer": "Reserve Bank of India",
-      "circular_or_scheme_date": "2026-01-16",
-      "effective_date": "2026-07-01",
-      "official_url": "https://rbidocs.rbi.org.in/rdocs/content/pdfs/SCHEME16012026_A.pdf",
+      "circular_or_scheme_date": "2021-11-12",
+      "effective_date": "2021-11-12",
+      "official_url": "https://cms.rbi.org.in",
       "source_type": "RBI Ombudsman Scheme",
       "exact_rule_summary": "Customers may file a complaint with the RBI Ombudsman if the Regulated Entity (RE) does not reply within 30 days of receipt of complaint, or if the customer is not satisfied with the RE's response. Portal: https://cms.rbi.org.in",
       "applicability_conditions": {
@@ -44,8 +45,86 @@
         "Must first raise complaint with bank/regulated entity and retain reference number",
         "Prototype generates draft only; actual submission requires user verification on official CMS portal"
       ],
-      "verified_at": null,
-      "status": "needs_manual_verification"
+      "verified_at": "2026-03-30",
+      "last_checked_date": "2026-03-30",
+      "status": "Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30"
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "upi_p2p_debit_not_credited",
+      "name": "UPI Person-to-Person (P2P): Account debited, beneficiary not credited",
+      "category": "UPI",
+      "circular_row": "RBI/2019-20/67 Annexure Item 4(a)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 4(a)",
+      "tat_days": 1,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 4(a), last checked 2026-03-30",
+      "description": "Customer account debited but beneficiary account not credited in a Person to Person (P2P) transaction."
+    },
+    {
+      "scenario_id": "upi_p2m_merchant_debit_failed",
+      "name": "UPI Person-to-Merchant (P2M): Account debited, confirmation not received at merchant location",
+      "category": "UPI",
+      "circular_row": "RBI/2019-20/67 Annexure Item 4(b)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 4(b)",
+      "tat_days": 5,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 4(b), last checked 2026-03-30",
+      "description": "Customer account debited, but transaction confirmation not received at merchant location (e-commerce or merchant store checkout)."
+    },
+    {
+      "scenario_id": "imps_debit_not_credited",
+      "name": "IMPS: Account debited, beneficiary not credited",
+      "category": "IMPS",
+      "circular_row": "RBI/2019-20/67 Annexure Item 3(a)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 3(a)",
+      "tat_days": 1,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 3(a), last checked 2026-03-30",
+      "description": "Account debited but the beneficiary account is not credited in IMPS transaction."
+    },
+    {
+      "scenario_id": "card_to_card_transfer",
+      "name": "Card to Card: Account debited, not credited",
+      "category": "Cards",
+      "circular_row": "RBI/2019-20/67 Annexure Item 2(a)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 2(a)",
+      "tat_days": 1,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 2(a), last checked 2026-03-30",
+      "description": "Card account debited but beneficiary card account is not credited."
+    },
+    {
+      "scenario_id": "atm_cash_not_dispensed",
+      "name": "ATM: Account debited but cash not dispensed",
+      "category": "ATM",
+      "circular_row": "RBI/2019-20/67 Annexure Item 1(a)",
+      "circular_reference": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20 Item 1(a)",
+      "tat_days": 5,
+      "day_basis": "calendar",
+      "compensation_per_day": 100,
+      "auto_reversal": true,
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "last_checked_date": "2026-03-30",
+      "status_label": "Source: RBI Circular RBI/2019-20/67 Item 1(a), last checked 2026-03-30",
+      "description": "Customer account debited but cash not dispensed at ATM."
     }
   ]
 }

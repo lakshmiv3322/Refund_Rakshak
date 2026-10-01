@@ -191,7 +191,7 @@ ${JSON.stringify(caseSnapshot, null, 2)}`;
 
       let execRes: any;
       try {
-        execRes = executeToolCall(toolName, toolArgs, caseState);
+        execRes = await executeToolCall(toolName, toolArgs, caseState, { imageBase64, imageMime });
       } catch (toolErr: any) {
         execRes = { result: { error: toolErr.message } };
       }
@@ -210,7 +210,9 @@ ${JSON.stringify(caseSnapshot, null, 2)}`;
       if (execRes.stop) {
         shouldStop = true;
         finalStatus = execRes.status || "completed";
-        if (execRes.result?.question) {
+        if (execRes.result?.confirmation_prompt) {
+          pendingQuestion = execRes.result.confirmation_prompt;
+        } else if (execRes.result?.question) {
           pendingQuestion = execRes.result.question;
         }
         if (caseState.pending_actions.length > 0) {

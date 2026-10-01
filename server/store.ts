@@ -180,8 +180,8 @@ export function getDatabase(): Database.Database {
     }
   }
 
-  // Seed demo case only if explicit SEED_DEMO=true
-  if (process.env.SEED_DEMO === "true") {
+  // Seed demo case by default in judge/demo mode (unless SEED_DEMO=false)
+  if (process.env.SEED_DEMO !== "false") {
     const existing = db.prepare("SELECT case_id FROM cases WHERE case_id = ?").get("RR-DEMO-001");
     if (!existing) {
       const demo = createDemoCaseState();
