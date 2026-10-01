@@ -1,0 +1,51 @@
+{
+  "rules": [
+    {
+      "rule_id": "rbi_failed_transaction_upi_debit_not_credited",
+      "title": "Harmonisation of Turn Around Time (TAT) and customer compensation for failed transactions using authorised Payment Systems",
+      "issuer": "Reserve Bank of India",
+      "circular_or_scheme_date": "2019-09-20",
+      "notification_number": "RBI/2019-20/67 DPSS.CO.PD No.629/02.01.014/2019-20",
+      "effective_date": "2019-10-15",
+      "official_url": "https://www.rbi.org.in/Commonperson/english/Scripts/Notification.aspx?Id=3074",
+      "source_type": "RBI Circular",
+      "exact_rule_summary": "For UPI and authorised payment systems where account is debited but beneficiary is not credited, reversal must be automatic (T+1). If not reversed within T+1, compensation of ₹100 per day of delay must be paid by the responsible bank/system provider to the customer's account.",
+      "applicability_conditions": {
+        "transaction_family": "UPI_OR_AUTHORIZED_PAYMENT_SYSTEM",
+        "condition": "payer_account_debited_but_beneficiary_not_credited",
+        "reversal_deadline_expression": "T+1",
+        "automatic_compensation": true,
+        "compensation_rate": 100
+      },
+      "exclusions_or_caveats": [
+        "Does not apply to unauthorized transactions or suspected fraud (handled under separate reporting path)",
+        "Does not apply to merchant refund delays where merchant has not processed refund",
+        "Does not apply to ATM cash non-dispensation cases (separate TAT rule applies)",
+        "Potential compensation estimate, subject to verification by the regulated entity"
+      ],
+      "verified_at": "2026-10-01",
+      "status": "active"
+    },
+    {
+      "rule_id": "rbi_integrated_ombudsman_scheme_2026",
+      "title": "Reserve Bank–Integrated Ombudsman Scheme, 2026",
+      "issuer": "Reserve Bank of India",
+      "circular_or_scheme_date": "2026-01-16",
+      "effective_date": "2026-07-01",
+      "official_url": "https://rbidocs.rbi.org.in/rdocs/content/pdfs/SCHEME16012026_A.pdf",
+      "source_type": "RBI Ombudsman Scheme",
+      "exact_rule_summary": "Customers may file a complaint with the RBI Ombudsman if the Regulated Entity (RE) does not reply within 30 days of receipt of complaint, or if the customer is not satisfied with the RE's response. Portal: https://cms.rbi.org.in",
+      "applicability_conditions": {
+        "complaint_first_made_to_re": true,
+        "waiting_period_days": 30,
+        "portal_url": "https://cms.rbi.org.in"
+      },
+      "exclusions_or_caveats": [
+        "Must first raise complaint with bank/regulated entity and retain reference number",
+        "Prototype generates draft only; actual submission requires user verification on official CMS portal"
+      ],
+      "verified_at": "2026-10-01",
+      "status": "active"
+    }
+  ]
+}

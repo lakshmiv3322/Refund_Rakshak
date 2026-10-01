@@ -1,0 +1,40 @@
+# aiKart Agent Manifest Template for RefundRakshak
+# Confirm exact field names and submission requirements against the official aiKart Agent Manifest Guide before submission.
+
+apiVersion: aikart.ai/v1alpha1
+kind: Agent
+metadata:
+  name: RefundRakshak
+  version: "1.0.0"
+  category: "Fintech Grievance & Legal-Tech Agent"
+  description: "Multilingual AI agent that reads transaction evidence, classifies grievances, applies verified RBI rules, and automates escalation paths."
+spec:
+  endpoint: "https://ais-dev-dnfsfjhq6z6qbrv3xejndb-848289306342.asia-east1.run.app/api/agent/run"
+  healthEndpoint: "https://ais-dev-dnfsfjhq6z6qbrv3xejndb-848289306342.asia-east1.run.app/api/health"
+  supportedInput:
+    - "text/plain"
+    - "application/json"
+    - "image/png"
+    - "image/jpeg"
+  supportedOutput:
+    - "application/json"
+  languages:
+    - "en"
+    - "hi"
+    - "ta"
+  tools:
+    - name: extract_transaction_evidence
+      description: "Extracts amount, date, UTR/ref, and status from transaction text or screenshot."
+    - name: classify_grievance
+      description: "Classifies grievance into supported UPI failure, fraud, merchant refund, or missing evidence."
+    - name: lookup_verified_rule
+      description: "Applies verified RBI circular rules (RBI/2019-20/67)."
+    - name: calculate_deadline_and_estimate
+      description: "Computes TAT deadline and potential compensation estimate."
+    - name: simulate_time
+      description: "Advances simulated clock and triggers escalation scheduler."
+  safetyNotes:
+    - "Prototype does not guarantee recovery or legal advice."
+    - "Requires explicit user approval before sending emails or notifications."
+    - "Masks sensitive financial data."
+  maintainer: "BharatAgentic Hackathon Team"
