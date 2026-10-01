@@ -14,8 +14,20 @@ function getGenAI() {
   });
 }
 
+export interface RunAgentStep {
+  type: "plan" | "tool_execution" | "token" | "completion";
+  plan?: string[];
+  tool?: string;
+  args?: any;
+  result?: any;
+  status?: string;
+  summary?: string;
+  timestamp?: string;
+}
+
 export interface RunAgentOptions {
-  onStep?: (step: { tool: string; args: any; result: any; status?: string }) => void;
+  onPlan?: (plan: string[]) => void;
+  onStep?: (step: RunAgentStep) => void;
   onToken?: (token: string) => void;
 }
 
@@ -30,9 +42,47 @@ export async function runAgent(
   status: string;
   pending_question?: string;
   approval_request?: any;
+  plan?: string[];
+  steps?: RunAgentStep[];
 }> {
   const primaryModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
   const fallbackModel = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.1-flash-lite";
+
+  // Formulate agent plan before execution (Phase 3, Item 9)
+  const isImageAttached = Boolean(imageBase64);
+  const plan: string[] = isImageAttached
+    ? [
+        "1. Extract evidence: Run Gemini Vision OCR with structured schema to parse amount, date, UTR, and bank",
+        "2. Classify grievance: Analyze dialogue for fraud / unauthorized safety boundaries",
+        "3. Match verified rule: Lookup RBI Circular RBI/2019-20/67 scenario table",
+        "4. Calculate statutory TAT: Evaluate T+1 / T+5 reversal deadline and ₹100/day compensation",
+        "5. Formulate redressal action: Draft official bank or nodal officer communication for user authorization",
+        "6. Autonomous SLA monitoring: Schedule follow-up checks against statutory time limits"
+      ]
+    : [
+        "1. Validate evidence: Check transaction amount, IST date, UTR reference, and bank provider",
+        "2. Classify grievance: Perform structured safety evaluation (fraud vs legitimate failed debit)",
+        "3. Match verified rule: Verify applicability under RBI Circular RBI/2019-20/67",
+        "4. Calculate statutory timeline: Determine reversal deadline and compute potential ₹100/day compensation",
+        "5. Prepare grievance draft: Generate structured dispute submission requiring explicit human approval",
+        "6. Schedule autonomous follow-up: Register periodic SLA checks for bank responsiveness"
+      ];
+
+  (caseState as any).active_plan = plan;
+  if (!Array.isArray((caseState as any).agent_steps)) {
+    (caseState as any).agent_steps = [];
+  }
+
+  const initialPlanStep: RunAgentStep = {
+    type: "plan",
+    plan,
+    summary: `Formulated 6-stage grievance resolution plan (${isImageAttached ? "Vision OCR Mode" : "Text Query Mode"})`,
+    timestamp: new Date().toISOString()
+  };
+
+  (caseState as any).agent_steps.push(initialPlanStep);
+  if (options?.onPlan) options.onPlan(plan);
+  if (options?.onStep) options.onStep(initialPlanStep);
 
   // Redact secrets BEFORE storing or sending to the model
   const { redactedText, foundSecrets, secretTypes } = redactSecrets(userMessage);
@@ -196,8 +246,42 @@ ${JSON.stringify(caseSnapshot, null, 2)}`;
         execRes = { result: { error: toolErr.message } };
       }
 
+      let stepSummary = "";
+      if (toolName === "extract_transaction_evidence") {
+        stepSummary = execRes.result?.merged_fields?.join(", ") || "Extracted structured facts from screenshot";
+      } else if (toolName === "update_case_facts") {
+        stepSummary = `Updated facts: Amount ₹${caseState.transaction_facts.amount || "N/A"}, Date ${caseState.transaction_facts.transaction_date || "N/A"}`;
+      } else if (toolName === "record_classification") {
+        stepSummary = `Classified as ${execRes.result?.classification} (${execRes.result?.branch})`;
+      } else if (toolName === "lookup_verified_rule") {
+        stepSummary = `Matched ${execRes.result?.rule_id || "RBI Circular RBI/2019-20/67"}`;
+      } else if (toolName === "calculate_deadline_and_estimate") {
+        stepSummary = `Calculated TAT: ${execRes.result?.deadline_date || "T+1"} (Delayed: ${execRes.result?.days_delayed} days, ₹${execRes.result?.potential_compensation_estimate})`;
+      } else if (toolName === "verify_bank_contact") {
+        stepSummary = `Verified contact for ${toolArgs.bank_name || "bank"} with Google Search`;
+      } else if (toolName === "generate_bank_complaint") {
+        stepSummary = `Drafted formal complaint to ${execRes.result?.payload?.bank_name || "Bank"}`;
+      } else if (toolName === "generate_nodal_escalation") {
+        stepSummary = `Drafted Principal Nodal Officer escalation notice`;
+      } else if (toolName === "generate_ombudsman_draft") {
+        stepSummary = `Prepared RBI Ombudsman complaint submission pack`;
+      } else {
+        stepSummary = execRes.result?.summary || `Executed ${toolName}`;
+      }
+
+      const toolStep: RunAgentStep = {
+        type: "tool_execution",
+        tool: toolName,
+        args: toolArgs,
+        result: execRes.result,
+        status: execRes.status || "success",
+        summary: stepSummary,
+        timestamp: new Date().toISOString()
+      };
+
+      (caseState as any).agent_steps.push(toolStep);
       if (options?.onStep) {
-        options.onStep({ tool: toolName, args: toolArgs, result: execRes.result, status: execRes.status });
+        options.onStep(toolStep);
       }
 
       responseParts.push({
@@ -270,6 +354,8 @@ ${JSON.stringify(caseSnapshot, null, 2)}`;
     message: finalMessage,
     status: finalStatus,
     pending_question: pendingQuestion,
-    approval_request: approvalRequest
+    approval_request: approvalRequest,
+    plan,
+    steps: (caseState as any).agent_steps
   };
 }

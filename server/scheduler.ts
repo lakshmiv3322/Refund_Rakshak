@@ -30,6 +30,12 @@ export function checkAndExecuteDueFollowups(nowIso?: string): { executedCount: n
       } catch (_) {}
     }
 
+    // Calculate days elapsed from initial bank complaint
+    const complaintDate = c.bank_complaint_date ? new Date(c.bank_complaint_date) : null;
+    const daysSinceComplaint = complaintDate
+      ? Math.ceil((now.getTime() - complaintDate.getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
+
     // 2. Process pending follow-ups
     for (const fu of c.followups) {
       if (fu.status === "pending") {
@@ -38,13 +44,13 @@ export function checkAndExecuteDueFollowups(nowIso?: string): { executedCount: n
           fu.status = "due";
           caseChanged = true;
 
-          const complaintDate = c.bank_complaint_date ? new Date(c.bank_complaint_date) : null;
-          const daysSinceComplaint = complaintDate
-            ? Math.ceil((now.getTime() - complaintDate.getTime()) / (1000 * 60 * 60 * 24))
-            : 0;
-
-          // 7-day nodal step: explicitly labeled as 'recommended wait', not an RBI requirement
-          if (complaintDate && !c.bank_response && daysSinceComplaint >= 7) {
+          // 7-day nodal step: recommended wait period
+          if (
+            complaintDate &&
+            !c.bank_response &&
+            daysSinceComplaint >= 7 &&
+            (fu.action_type === "prepare_nodal_escalation" || fu.condition === "bank_no_response_7_days")
+          ) {
             fu.status = "executed";
             c.escalation_stage = "nodal_escalation_ready";
             executedCount++;
@@ -69,6 +75,19 @@ export function checkAndExecuteDueFollowups(nowIso?: string): { executedCount: n
                 simulated: false,
                 source_references: c.source_references
               });
+
+              // Ensure 30-day Ombudsman check is registered
+              const hasOmbudsmanFollowup = c.followups.some(f => f.action_type === "prepare_ombudsman_escalation");
+              if (!hasOmbudsmanFollowup && complaintDate) {
+                const ombudsmanDueDate = new Date(complaintDate.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+                c.followups.push({
+                  id: "fu_omb_" + Math.random().toString(36).substring(2, 9),
+                  due_date: ombudsmanDueDate,
+                  condition: "bank_no_response_30_days",
+                  action_type: "prepare_ombudsman_escalation",
+                  status: "pending"
+                });
+              }
             }
 
             // Send notification email to user if not already sent
@@ -95,7 +114,74 @@ export function checkAndExecuteDueFollowups(nowIso?: string): { executedCount: n
               source_ids: []
             });
           }
+
+          // 30-day Ombudsman step: statutory eligibility under RBI Integrated Ombudsman Scheme (Phase 3, Item 10)
+          if (
+            complaintDate &&
+            daysSinceComplaint >= 30 &&
+            (fu.action_type === "prepare_ombudsman_escalation" || fu.condition === "bank_no_response_30_days" || !c.bank_response)
+          ) {
+            fu.status = "executed";
+            c.escalation_stage = "ombudsman_eligible";
+            executedCount++;
+
+            const existingOmbudsmanAction = c.pending_actions.find(a => a.type === "rbi_ombudsman_draft");
+            if (!existingOmbudsmanAction) {
+              const f = c.transaction_facts;
+              c.pending_actions.push({
+                id: "act_omb_" + Math.random().toString(36).substring(2, 9),
+                type: "rbi_ombudsman_draft",
+                status: "pending_approval",
+                requires_approval: true,
+                created_at: nowString,
+                payload: {
+                  portal_url: "https://cms.rbi.org.in",
+                  subject: `RBI Ombudsman Grievance Submission Pack - Ref ${f.transaction_reference || "N/A"}`,
+                  body: `=== RBI COMPLAINT MANAGEMENT SYSTEM (CMS) PACK ===\nRegulated Entity: ${f.bank_or_provider || "Bank"}\nTransaction Date: ${f.transaction_date}\nAmount: ₹${f.amount}\nReference: ${f.transaction_reference || "N/A"}\nInitial Complaint Date: ${c.bank_complaint_date}\nDays Elapsed: ${daysSinceComplaint}\n\nRelief Claimed: Full reversal of ₹${f.amount} plus statutory delay compensation of ₹${c.latest_compensation_estimate || 0} under RBI Circular RBI/2019-20/67.\n\nNOTE: Submission happens on the official Reserve Bank of India CMS portal at https://cms.rbi.org.in. Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30.`
+                },
+                simulated: false,
+                source_references: c.source_references
+              });
+            }
+
+            c.trace.unshift({
+              id: "tr_omb_" + Math.random().toString(36).substring(2, 9),
+              timestamp: nowString,
+              event_type: "SCHEDULER",
+              label: "RBI Ombudsman Preconditions Met",
+              tool_name: "scheduler",
+              branch: c.branch,
+              status: "success",
+              summary: `30-day statutory waiting period elapsed without resolution. Prepared official RBI Ombudsman complaint package for cms.rbi.org.in.`,
+              source_ids: []
+            });
+          }
         }
+      }
+    }
+
+    // Direct check for cases that reached 30 days without an explicit followup record
+    if (complaintDate && daysSinceComplaint >= 30 && !c.bank_response && c.escalation_stage !== "ombudsman_eligible") {
+      const existingOmb = c.pending_actions.find(a => a.type === "rbi_ombudsman_draft");
+      if (!existingOmb) {
+        c.escalation_stage = "ombudsman_eligible";
+        const f = c.transaction_facts;
+        c.pending_actions.push({
+          id: "act_omb_" + Math.random().toString(36).substring(2, 9),
+          type: "rbi_ombudsman_draft",
+          status: "pending_approval",
+          requires_approval: true,
+          created_at: nowString,
+          payload: {
+            portal_url: "https://cms.rbi.org.in",
+            subject: `RBI Ombudsman Grievance Submission Pack - Ref ${f.transaction_reference || "N/A"}`,
+            body: `=== RBI COMPLAINT MANAGEMENT SYSTEM (CMS) PACK ===\nRegulated Entity: ${f.bank_or_provider || "Bank"}\nTransaction Date: ${f.transaction_date}\nAmount: ₹${f.amount}\nReference: ${f.transaction_reference || "N/A"}\nInitial Complaint Date: ${c.bank_complaint_date}\nDays Elapsed: ${daysSinceComplaint}\n\nRelief Claimed: Full reversal of ₹${f.amount} plus statutory delay compensation of ₹${c.latest_compensation_estimate || 0} under RBI Circular RBI/2019-20/67.\n\nNOTE: Submission happens on the official Reserve Bank of India CMS portal at https://cms.rbi.org.in. Source: RBI Integrated Ombudsman Scheme, last checked 2026-03-30.`
+          },
+          simulated: false,
+          source_references: c.source_references
+        });
+        caseChanged = true;
+        executedCount++;
       }
     }
 
